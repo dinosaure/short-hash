@@ -1,0 +1,1046 @@
+<!DOCTYPE html>
+<head>
+  <meta charset="utf-8">
+  <script src="https://d3js.org/d3.v5.min.js"></script>
+  <script src="https://unpkg.com/d3-simple-slider"></script>
+  <script src="https://unpkg.com/simple-statistics@7.0.2/dist/simple-statistics.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/9.15.6/styles/default.min.css">
+  <link href="style.css" rel="stylesheet" type="text/css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/9.15.6/highlight.min.js"></script>
+  <style>
+    *{
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body{
+    width: 100%;
+    height: 100%;
+    font-family:Helvetica Neue,metric,sans-serif;
+    text-rendering: optimizeLegibility;
+}
+
+.center{
+    width: 500px;
+    margin:auto
+}
+
+text{
+    font-family: metric,sans-serif;
+}
+
+.ml {
+    text-align: left
+}
+
+svg {
+    overflow: hidden;
+    margin: auto
+}
+
+.axis line, .axis path{
+    stroke: #2E3532;
+    stroke-width:1px;
+}
+
+.axisTitle, .axis text{
+    fill: #2E3532;
+    font-size:12px;
+}
+
+.background {
+    fill: #FBFBFB;
+    stroke: #2E3532;
+}
+
+.axisTitle, .chartTitle{
+    text-anchor: middle
+}
+
+
+.ytitle {
+    text-anchor: middle;
+    transform: rotate(90deg)
+}
+
+.warningtext{
+    text-anchor: center;
+    fill: #F06449;
+}
+
+.regLine {
+    stroke: #F06449;
+    stroke-width:2px;
+    opacity:0.7
+}
+
+.circle {
+    fill: #4ECDC4;
+    stroke: #292f36;
+    stroke-width:0.3px
+}
+
+table {
+    margin:auto;
+    text-align:left;
+    border-spacing: 15px 5px;
+    border: 1px solid #2E3532
+}
+
+th {
+    text-align: center;
+    color:#F06449
+}
+
+
+tr {
+    fill: #2E3532;
+    font-size:10px
+}
+
+.tooltip .tooltiptext {
+  visibility: hidden;
+  width: auto;
+  background-color: #F06449;
+  color: #FFFFFF;
+  text-align: center;
+  border-radius: 10px;
+  padding: 0 5px 0 5px;
+  /* Position the tooltip */
+  position: absolute;
+  z-index: 1;
+}
+
+.tooltip:hover .tooltiptext {
+  visibility: visible;
+}
+.bar {
+    fill: #4ECDC4;
+    stroke:#292f36;
+}
+.bar:hover {
+    fill: #F06449;
+    stroke:#292f36;
+    stroke-width:1px;
+}
+
+.radio {
+    margin: auto;
+    width : 200px;
+}
+
+.wrapper {
+    display: grid;
+    margin: 50px 50px 50px 50px;
+    gap: 10px 20px;
+    grid-auto-rows: minmax(20px, auto);
+    text-align: center;
+    place-items: center;
+}
+
+.mainTitle, .summarizeTitle {
+    height:30px;
+    width: auto;
+    border-radius: 2px;
+    padding: 0 45px 0 45px;
+    border-style: solid;
+    border-width:1px;
+    box-shadow: 2px 2px 1px rgba(0,0,0,0.1);
+    color:  #2E3532;
+    background: #FBFBFB;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+}
+
+.slidecontainer{
+    width: 50%;
+}
+
+  </style>
+</head>
+<body>
+
+  <script type="text/javascript">
+    // structure of JSON
+// { xLabel: string,
+//   yLabel: string,
+//   series: [ tests ] }
+//
+// tests := { name: string,
+//            description: { start : int, sampling: float, stabilize: bool,
+//                           quota: float, limit: int, instances: [string],
+//                           samples: int, time : float}
+//            dataset: [ point ],
+//            kde : [ v: float ] (optional)
+//            result: { estimate: float, r_square: float (optional) } }
+//
+// point := { x : double,
+//            y : double }
+//
+// xLabel and yLabel are the same for any tests
+window.onload = function () {
+
+const wsvg = 600;
+const hsvg = 400;
+const wslider = 200;
+const hslider = 50;
+const margin = {left:50,right:50,top:20,bottom:50};
+const dotSize = 1.5;
+const innerW = wsvg-(margin.left+margin.right);
+const innerH = hsvg-(margin.top+margin.bottom);
+
+const marginbar = {left:150,right:150,top:50,bottom:50};
+const wbar = 900;
+const innerWbar = wbar-(marginbar.left+marginbar.right);
+
+const SQRT_2PI = Math.sqrt(2 * Math.PI);
+
+// Main function : place containers and call plot functions.
+function render(inputs) {
+    inputs.series.forEach(
+	function(serie) {
+	    serie.dataset.forEach(
+		function(d) {
+		    d.x = +d.x;
+		    d.y = +d.y;
+		});}
+    );
+
+    // First step : check if there is no kde/histogram data at all in
+    // the benchmarks, in which case, we want to reduce our layout to
+    // one column.
+    let nonempty_kde = false;
+    inputs.series.forEach(function (serie) {
+	if ('kde' in serie) {
+	    nonempty_kde = nonempty_kde || true;} });
+    const nb_col = nonempty_kde ? 2 : 1;
+
+    // ************************************************ //
+    //              Layout of the page                  //
+    // ************************************************ //
+    // + a summarize bar graph on top
+    // + one section for each benchmark which includes
+    //     * 1 title
+    //     * 1 linear regression graph and its title and information table
+    //     * if kde data are available a histogram/kde graph with its control panel.
+    //
+    // If none of the benchmarks has kde data, the layout is the same
+    // but with only one column (no hist/kde graphs).
+    //
+    //
+    //              c1:        c2:
+    //
+    // r1:            *title*
+    //           ___________________
+    // r2:      |   summarize bar   |
+    //          |___________________|
+    //
+    // r3:           *title-1*
+    //
+    // r4:        *title*   *radio*
+    //           _______     _______
+    // r5:      | lr-1  |   | kde-1 |
+    //          |_______|   |_______|
+    //
+    // r6:      *infos-1*   *slider-1*
+    // ..
+    // r(4i+3):       *title-i*
+    //
+    // r(4i+4):  *title*     *radio*
+    //           _______     _______
+    // r(4i+5): | lr-i  |   | kde-i |
+    //          |_______|   |_______|
+    //
+    // r(4i+6): *infos-i*   *slider-i*
+    //
+    // etc ..
+
+      const main = d3.select("body")
+	  .append("div")
+	    .attr("class", "wrapper")
+	    .style("grid-template-columns", (nonempty_kde ? "repeat(2,"+wsvg+"px)" : "900px"))
+	    .attr("id", "main");
+
+    // ************************************************ //
+    //              Summarize bar graph                 //
+    // ************************************************ //
+
+    // Title
+    main.append("div")
+   	  .style("grid-row", "1")
+      	.style("grid-column", "1 / "+(nb_col+1))
+  	  .attr("class", "summarizeTitle")
+  	.text("Benchmarks summary");
+
+    // Bar graph
+    let bar_container = main
+	.append("div")
+   	  .style("grid-row", "2")
+      	  .style("grid-column", "1 / "+(nb_col+1))
+	  .attr("id", "bar");
+    plot_summarize_bar_graph(bar_container, inputs);
+
+
+    // ************************************************ //
+    //              Layout for lr/kde graphs            //
+    // ************************************************ //
+
+    // Benchmark titles
+    const titles = main
+	  .selectAll(".mainTitle")
+	  .data(inputs.series)
+	  .enter()
+	  .append("div")
+	    .attr("id", (data, i) => "title-"+i)
+   	    .style("grid-row", (data,i) =>""+(4*i+3))
+      	    .style("grid-column", "1 / "+(nb_col+1))
+  	    .attr("class","mainTitle")
+	  .append("text")
+  	    .attr("x", wsvg)
+  	    .attr("y", margin.top-10)
+            .text((data, i) => "#"+data.name);
+
+    // Linear regression graph titles
+    const titles_lr = main
+	  .selectAll("#title_lr")
+	  .data(inputs.series)
+	  .enter()
+	  .append("div")
+            .attr("id",  "title_lr")
+   	    .style("grid-row", (data,i) =>""+(4*i+4))
+   	    .style("grid-column", "1")
+	  .append("text")
+  	    .attr("class","chartTitle")
+  	    .text("Linear regression");
+
+    // Containers for linear regression graphs
+    const lr_graphs = main
+	  .selectAll(".lr")
+	  .data(inputs.series)
+	  .enter()
+	  .append("div")
+            .attr("class", "lr")
+	    .attr("id", (data, i) => "linearRegression-"+i)
+   	    .style("grid-row", (data,i) =>""+(4*i+5))
+   	  .style("grid-column", "1");
+
+    // Containers for linear regression info tables
+    const lr_info = main
+	  .selectAll(".lr-info")
+	  .data(inputs.series)
+	  .enter()
+	  .append("div")
+            .attr("class", "lr-info")
+	    .attr("id", (data, i) => "lr-info-"+i)
+   	    .style("grid-row", (data,i) =>""+(4*i+6))
+            .style("grid-column", "1");
+
+    let radio_div, kde_graphs, kde_controler;
+    if (nonempty_kde) {
+	// Containers for radio buttons to choose between histogram/kde plots
+	radio_div = main
+	      .selectAll(".radio_div")
+	      .data(inputs.series)
+	      .enter()
+	      .append("div")
+              .attr("class",  "radio")
+	      .attr("id", (d, i) => "radio_div"+i)
+   	      .style("grid-row", (data,i) =>""+(4*i+4))
+   	      .style("grid-column", "2");
+
+	// Containers for kde/hist graph
+	kde_graphs = main
+	      .selectAll(".kde")
+	      .data(inputs.series)
+	      .enter()
+	      .append("div")
+              .attr("class", "kde")
+	      .attr("id", (data, i) => "histKde-"+i)
+   	      .style("grid-row", (data,i) =>""+(4*i+5))
+   	      .style("grid-column", "2");
+
+	// Containers for kde/hist controlers
+	kde_controler = main
+	      .selectAll(".kde-controler")
+	      .data(inputs.series)
+	      .enter()
+	      .append("div")
+              .attr("class", "kde-controler")
+	      .attr("id", (data, i) => "kde-controler-"+i)
+   	      .style("grid-row", (data,i) =>""+(4*i+6))
+              .style("grid-column", "2");
+    }
+
+    // ************************************************ //
+    //          Linear regression graph                 //
+    // ************************************************ //
+    lr_graphs.each( function(serie, i) {
+	//Curves for each input
+	const xMin = 0;
+	const xMax = d3.max(serie.dataset, d => d.x);
+	const yMin = 0;
+	const yMax = d3.max(serie.dataset, d => d.y);
+
+	// Define x axis
+	const xScale = d3.scaleLinear()
+  	      .domain([xMin,xMax])
+  	      .range([0,innerW])
+  	      .nice();
+	const xAxis = d3.axisBottom()
+  	      .scale(xScale)
+  	      .ticks(8, "s");
+	// "s" = number format such as 1000 -> 1k
+
+	// Define y axis
+	const yScale = d3.scaleLinear()
+  	      .domain([yMin,yMax])
+  	      .range([innerH,0])
+  	      .nice();
+	const yAxis = d3.axisLeft()
+  	      .scale(yScale)
+  	      .ticks(8, "s");
+
+	// Svg
+  	const plot = d3.select(this)
+	    .append("svg")
+  	      .attr("width",wsvg)
+  	      .attr("height",hsvg);
+	// Color background
+	plot.append("rect")
+  	    .attr("x",margin.left)
+  	    .attr("y",margin.top)
+  	    .attr("width",innerW)
+  	    .attr("height",innerH)
+  	    .attr("class","background axis");
+	// Plot axis
+	plot.append("g")
+  	    .attr("transform",
+	 	  "translate("+margin.left+","
+	 	  +(hsvg-margin.bottom)+")")
+	    .attr("class", "axis")
+  	    .call(xAxis);
+	plot.append("g")
+  	    .attr("transform",
+	  	  "translate("+margin.left+","
+		  +margin.top+")")
+	    .attr("class", "axis")
+  	    .call(yAxis);
+	// Print axis titles
+	plot.append("text")
+	    .attr("class", "axisTitle")
+	    .attr("x", wsvg/2)
+	    .attr("y", hsvg-10)
+	    .text(inputs.xLabel);
+	plot.append("text")
+	    .attr("class", "axisTitle ytitle")
+	    .attr("transform-origin", 0, hsvg/2)
+	    .attr("x", 0)
+	    .attr("y", hsvg/2)
+	    .text(inputs.yLabel);
+
+	// Plot data
+	plot.append("g")
+	    .attr("transform",
+		  "translate("+margin.left+","
+		  +margin.top+")")
+  	    .selectAll("circle")
+  	    .data(serie.dataset)
+  	    .enter()
+  	    .append("circle")
+	    .attr("class", "circle")
+  	    .attr("r", dotSize)
+  	    .attr("cx", d => xScale(d.x))
+  	    .attr("cy", d => yScale(d.y));
+
+	// Plot linear regression line
+
+	const xVals = serie.dataset.map((e,j) => e.x);
+	const yVals = serie.dataset.map((e,j) => e.y);
+	const pairs = [];
+	xVals.forEach((d,i) => pairs.push([xVals[i],yVals[i]]));
+	const linReg = ss.linearRegression(pairs);
+	const linRegLine = ss.linearRegressionLine(linReg);
+	let line = plot
+	    .append("line")
+    	      .attr("transform","translate("+margin.left+","+margin.top+")")
+    	      .attr("class","regLine")
+    	      .attr("x1",xScale(xMin))
+    	      .attr("x2",xScale(xMin))
+    	      .attr("y1",yScale(linRegLine(xMin)))
+    	      .attr("y2",yScale(linRegLine(xMin)));
+	line.transition().duration(1000).delay(2000)
+    	      .attr("x2",xScale(xMax))
+    	      .attr("y2",yScale(linRegLine(xMax)));
+
+	// Add text boxes
+	//const meanX = ss.mean(xVals).toFixed(0);
+	//const meanY = ss.mean(yVals).toFixed(2);
+	//const varX = ss.sampleVariance(xVals).toFixed(0);
+	//const varY = ss.sampleVariance(yVals).toFixed(1);
+	//const corCoeff = ss.sampleCorrelation(xVals,yVals).toFixed(3);
+
+	const lr_results = [
+	    ["Linear regression line", "y = "+linReg.b.toFixed(2)+" + "+linReg.m.toFixed(3)+"x"],
+	    ["Coefficient", serie.result.estimate],
+	    ["R²", serie.result.r_square]
+	];
+
+	const sampling_to_string = sampling =>
+              (Number.isInteger(sampling) ?  "`Linear "+sampling+"" : "`Geometric "+sampling+"");
+
+	const format = v  => d3.format("s")(v);
+
+	const param_benchmarks = [
+	    ["LR sampling (sampling)", sampling_to_string(serie.description.sampling)],
+	    ["Start (start)", serie.description.start],
+	    ["Benchmark runtime (time / quota)",
+	     format(serie.description.time) + " / " + format(serie.description.quota)],
+	    ["Number of runs (samples)", serie.description.samples + " / " + serie.description.limit],
+	    ["Stabilized GC (stabilize)", serie.description.stabilize]
+	];
+
+	const table = d3.select("#lr-info-"+i)
+	      .append("table");
+
+	table.append("thead")
+	    .append("tr")
+	    .append("th")
+	    .attr("colspan", 2)
+	    .attr("scope", "col")
+	    .text("Linear regression results");
+
+	table.append("tbody")
+	    .selectAll("tr")
+	    .data(lr_results)
+	    .enter()
+	    .append("tr")
+	    .selectAll("td")
+	    .data(d => d)
+	    .enter()
+	    .append("td")
+	    .text(d=>d);
+
+	table.append("thead")
+	    .append("tr")
+	    .append("th")
+	    .attr("class", "tooltip")
+	    .attr("colspan", 2)
+	    .attr("scope", "col")
+	    .text("Benchmarks parameters")
+	    .append("span")
+	    .attr("class","tooltiptext")
+	    .text("See [Benchmarks.stats]");
+
+	table.append("tbody")
+	    .selectAll("tr")
+	    .data(param_benchmarks)
+	    .enter()
+	    .append("tr")
+	    .selectAll("td")
+	    .data(d => d)
+	    .enter()
+	    .append("td")
+	    .text(d=>d);
+
+    });
+
+    // ************************************************ //
+    //         Histogram and kde graphs                 //
+    // ************************************************ //
+    if (nonempty_kde) {
+        kde_graphs.each(function (serie, i) {
+
+	    // Svg for histogram and kde graphs
+	    let pdfgraph = d3.select(this)
+		.append("svg")
+		.attr("id", "pdfgraph")
+		.attr("width", wsvg)
+		.attr("height", hsvg)
+		.append("g")
+		.attr("transform", "translate("+margin.left+","+margin.top+")");
+
+	    // If there is no kde field in the data [serie], some note
+	    // is written in the svg window.
+	    if (!('kde' in serie)) {
+		pdfgraph.append("text")
+		    .attr("x", (margin.left+margin.right+wsvg)/2)
+		    .attr("y", (margin.top+margin.bottom+hsvg)/2)
+		    .attr("class", "warning")
+		    .text("No available data");
+	    } else if (d3.max(serie.kde) == d3.min(serie.kde)) {
+		pdfgraph.append("text")
+		    .attr("x", wsvg/2)
+		    .attr("y", hsvg/2)
+		    .attr("class", "warningtext")
+		    .text("All data have same value.");
+	    } else {
+		const data = serie.kde;
+		//Some default values
+		const min_slider = (d3.max(data)-d3.min(data))/data.length;
+		const max_slider = (d3.max(data)-d3.min(data))/30;
+		let vslider = min_slider;
+
+		//Radio buttons
+		const form = d3.select("#radio_div"+i)
+		      .append("form");
+
+		form.append("input")
+		    .attr("type", "radio")
+		    .attr("name", "graph")
+		    .attr("value", "hist"+i)
+		    .attr("name", "graph")
+		    .attr("checked", "checked")
+		    .on("change", () => plot_chosen_graph(d3.select(this), "hist"));
+		form.append("label")
+		    .attr("for", "hist"+i)
+		    .text("Histogram");
+		form.append("input")
+		    .attr("type", "radio")
+		    .attr("value", "kde"+i)
+		    .attr("name", "graph")
+		    .on("change", () => plot_chosen_graph(d3.select(this), "kde"));
+		form.append("label")
+		    .attr("for", "kde"+i)
+		    .text("KDE");
+
+		//axis
+		const min = d3.min(data),
+		      max = d3.max(data);
+		const minX = d3.max([0, min-max_slider]),
+		      maxX = max+max_slider;
+
+		//X axis is the same for both graphs (histogram and kde)
+		const xscale = d3.scaleLinear()
+		      .range([0, innerW])
+		      .domain([minX, maxX])
+		      .nice();
+		const xAxis = d3.axisBottom()
+		      .scale(xscale)
+		      .ticks(8, "s");
+
+		//Y axis has a different domain value between both graphs.
+		//So yscale.domain() is defined individually for each plot.
+		const yscale = d3.scaleLinear()
+		      .range([0, innerH])
+		      .nice();
+		const yAxis = d3.axisLeft()
+		      .scale(yscale)
+		      .ticks(8, "s");
+
+		//x value for kde graph
+		const n = 1000;
+		const x = Array(n);
+		const xmin = d3.min(xscale.domain()),
+		      xmax = d3.max(xscale.domain());
+		for (let i=0; i<n; i++) { x[i] = xmin + i*(xmax-xmin)/n; }
+
+		//Compute kde function for min bandwidth value to determine to determine
+		//the max value of Y axis. Only happens one time when loading the webpage.
+		const kde = kernelDensityEstimation(data, min_slider);
+		const v = new Array(n);
+		for (let i=0; i<n;i++){ v[i] = kde(x[i]);}
+		const maxYkde = d3.max(v),
+		      maxYhist = d3.max(histogram(data, max_slider, min, max));
+
+		//background
+		pdfgraph
+		    .append("rect")
+  		    .attr("x", 0)
+  		    .attr("y", 0)
+  		    .attr("width", innerW)
+  		    .attr("height", innerH)
+  		    .attr("class","background axis");
+
+		// x Axis
+		const gxAxis = pdfgraph
+	              .append("g")
+	              .attr("transform","translate(0"+","+innerH+")")
+	              .attr("class", "axis")
+	              .call(xAxis);
+
+		// y Axis
+		const gyAxis = pdfgraph
+	              .append("g")
+	              .attr("class", "axis")
+	              .call(yAxis);
+
+		// X Axis title
+		pdfgraph.append("text")
+		    .attr("class", "axisTitle")
+		    .attr("x", innerW/2)
+		    .attr("y", innerH+40)
+		    .text("Estimated "+inputs.yLabel);
+
+		plot_chosen_graph(d3.select(this), "hist");
+
+		function plot_chosen_graph(container, choice) {
+
+
+		    container.selectAll(".bar").remove();
+		    container.select(".mypath").remove();
+		    container.select(".ytitle").remove();
+
+		    // Erasing control panels if it exists and initializing it
+		    const control_container = d3.select("#kde-controler-"+i);
+		    const slider = control_container.select("#slider-"+i);
+		    const slidertitle = control_container.select("#slidertitle-"+i);
+		    if (!slider.empty())  {
+			slider.remove();
+		    }
+		    if (!slidertitle.empty())  {
+			slidertitle.remove();
+		    }
+
+		    //Hist part
+		    if (choice=="hist") {
+			// Defined yAxis
+			yscale.domain([maxYhist, 0]).nice();
+			yAxis.scale(yscale);
+			gyAxis.call(yAxis);
+
+			// y Axis title
+			pdfgraph.append("text")
+			    .attr("transform-origin", "10 "+(innerH/2))
+			    .attr("class", "axisTitle ytitle")
+			    .attr("x", 10)
+			    .attr("y", innerH/2)
+			    .text("Count");
+
+			const barwidth = vslider;
+
+			const update_hist =
+			      plot_histogram(pdfgraph, data, barwidth, xscale, yscale);
+
+			//slider
+			control_container
+			    .insert("p")
+			    .attr("align", "center")
+			    .attr("id", "slidertitle-"+i)
+			    .text("Barwidth");
+
+			control_container
+			    .insert("svg")
+			    .attr("width", wsvg)
+			    .attr("height", hslider)
+			    .attr("id", "slider-"+i)
+			    .append("g")
+			    .attr("transform", "translate("+(wsvg-wslider)/2+",10)")
+			    .call(d3
+				  .sliderBottom()
+				  .min(min_slider)
+				  .max(max_slider)
+				  .width(wslider)
+				  .ticks(5, "s")
+				  .default(vslider)
+				  .fill("red")
+				  .on("onchange", (value) => {
+				      if (value > 0) {
+					  vslider=value;
+					  update_hist(vslider);}}));
+		    } else {
+			//Defined yAxis
+			yscale.domain([maxYkde, 0]).nice();
+			yAxis.scale(yscale);
+			gyAxis.call(yAxis);
+
+			// y Axis title
+			pdfgraph.append("text")
+			    .attr("transform-origin", "10 "+(innerH/2))
+			    .attr("class", "axisTitle ytitle")
+			    .attr("x", +10)
+			    .attr("y", innerH/2)
+			    .text("Density");
+
+			const bandwidth = vslider;
+			const update_kde = plot_kde(pdfgraph, data, bandwidth, xscale, yscale, x);
+
+			//slider
+			control_container.insert("p")
+			    .attr("align", "center")
+			    .attr("id", "slidertitle-"+i)
+			    .text("Bandwidth");
+
+			control_container.insert("svg")
+			    .attr("width", wsvg)
+			    .attr("height", hslider)
+			    .attr("id", "slider-"+i)
+			    .append("g")
+			    .attr("transform", "translate("+(wsvg-wslider)/2+",10)")
+			    .call(d3
+				  .sliderBottom()
+				  .min(min_slider)
+				  .max(max_slider)
+				  .width(wslider)
+				  .ticks(5, "s")
+				  .default(vslider)
+				  .fill("red")
+				  .on("onchange", (value) =>
+				      {if (value > 0) { vslider=value; update_kde(vslider);}}));
+		    }; // end else
+		}; // end function
+	    }; //end else (available kde data)
+	}); //end function // end each
+    }; //end if
+
+
+
+function plot_summarize_bar_graph(container, inputs) {
+
+    const hbar = d3.min([60*inputs.series.length, hsvg]);
+    const innerHbar = hbar - marginbar.top - marginbar.bottom;
+
+    const xb = d3.scaleLinear()
+	  .range([0, innerWbar])
+	  .domain([0, d3.max(inputs.series, serie => serie.result.estimate)])
+	  .nice();
+    const yb = d3.scaleBand()
+	  .range([0, innerHbar])
+	  .padding(0.2)
+	  .domain(inputs.series.map(serie => serie.name));
+    const xbAxis = d3.axisBottom()
+	  .scale(xb)
+	  .ticks(8, "s");
+    const ybAxis = d3.axisLeft()
+	  .scale(yb);
+
+    const bargraph =
+	container.append("svg")
+	.attr("width", wbar)
+	.attr("height", hbar);
+
+    // background
+    bargraph.append("rect")
+  	.attr("x", marginbar.left)
+  	.attr("y", marginbar.top)
+  	.attr("width", innerWbar)
+  	.attr("height", innerHbar)
+  	.attr("class", "background axis");
+    // x Axis
+    bargraph.append("g")
+	.attr("transform","translate("+marginbar.left+","+(hbar-marginbar.bottom)+")")
+	.attr("class", "axis")
+	.call(xbAxis);
+    // x axis title
+    bargraph.append("text")
+	.attr("class", "axisTitle")
+	.attr("x", wbar/2)
+	.attr("y", hbar-10)
+	.text("Estimated "+inputs.yLabel);
+    // y Axis
+    bargraph.append("g")
+	.attr("transform","translate("+marginbar.left+","+marginbar.bottom+")")
+	.attr("class", "axis")
+	.call(ybAxis);
+
+    // Bargraph
+    bargraph.append("g")
+	.attr("transform","translate("+marginbar.left+","+marginbar.top+")")
+	.selectAll(".bar")
+   	.data(inputs.series)
+	.enter()
+	.append("rect")
+	.attr("class", "bar")
+	.attr("y", serie => yb(serie.name))
+	.attr("height", yb.bandwidth)
+	.attr("x", serie => 0)
+	.attr("width", serie => xb(serie.result.estimate))
+	.attr("fill", "#4ECDC4")
+	.on("mouseover", function (serie) {
+	    // Specify where to put label of text
+	    bargraph.append("text")
+		.attr("class", "axisTitle")
+		.attr("id", "tt")
+		.attr("x", wbar-200)
+		.attr("y", marginbar.top-10)
+		.text("Value: "+d3.format(".4s")(serie.result.estimate));
+	})
+        .on("mouseout", function (serie) {
+	    // Select text by id and then remove
+	    d3.selectAll("#tt").transition().duration("50").remove();
+	});
+
+};
+
+// [histrogram (data, barwidth, min, max)] computes histogram
+// values as follows:
+// - a value [v] of [data] contributes to the bar between [u] and
+// [u+barwidth] if u <= v < u+barwidth
+// - the [i]th bar is between [min+i*barwidth] and [min+(i+1)*barwidth]
+// - [max] is used only to determine the number of bars. It MUST be greater
+// than [d3.max(data)]
+function histogram(data, barwidth, min, max) {
+    const nbar = Math.floor((max-min)/barwidth)+1;
+    let hist = new Array(nbar);
+    for (let i=0; i<nbar; i++) {
+	hist[i]=0;
+    }
+
+    data.forEach(function(v) {
+	const ind = Math.floor((v-min)/barwidth);
+	hist[ind] ++;
+    });
+
+    let n = data.length;
+    for (let i=0; i<nbar; i++) {
+	hist[i] = hist[i];
+    }
+
+    return hist;
+}
+
+// [plot_histogram(container, data, bandwidth, xscale, yscale)]
+// draws the histogram computes with
+// [histogram(data, barwidth, d3.min(data), d3.max(data)]
+// in the html element [container].
+//
+// Axis are already defined on [container], using [xscale] and [yscale].
+//
+// In addition, this function returns the update function
+// that redraw the bar if called with a new barwidth.
+function plot_histogram(container, data, barwidth, xscale, yscale) {
+    const min = d3.min(data),
+	  max = d3.max(data);
+    const hist = histogram(data, barwidth, min, max);
+    const sample_nb = data.length;
+
+    const print_value = function (v) {
+	container.append("text")
+	    .attr("class", "axisTitle")
+	    .attr("id", "tt2")
+	    .attr("x", wsvg-170)
+	    .attr("y", 20)
+	    .text("Value: "+d3.format("d")(v)+" / "+d3.format("d")(sample_nb));};
+
+    const rects = container
+	  .selectAll(".bar")
+   	  .data(hist)
+	  .enter();
+
+    rects.append("rect")
+	.attr("class", "bar")
+	.attr("x", (v, i) => xscale(i*barwidth+min))
+	.attr("width", (v, i) => xscale(barwidth)-xscale(0))
+	.attr("y", (v, i) => yscale(v))
+	.attr("height", (v, i) => innerH-yscale(v))
+	.on("mouseover", print_value)
+        .on("mouseout", () => d3.selectAll("#tt2").transition().duration("50").remove());
+
+    function update_hist(nbarwidth) {
+	//compute new histograph values
+	const nhist = histogram(data, nbarwidth, min, max);
+
+	const rects = container
+	      .selectAll(".bar")
+   	      .data(nhist);
+
+	rects.exit().remove();
+
+	rects.enter().append("rect").attr("class", "bar")
+	    .merge(rects)
+	    .attr("x", (v, i) => xscale(i*nbarwidth+min))
+	    .attr("width", (v, i) => xscale(nbarwidth)-xscale(0))
+	    .attr("y", (v, i) => yscale(v))
+	    .attr("height", (v, i) => innerH-yscale(v))
+	    .on("mouseover", print_value)
+            .on("mouseout", () => d3.selectAll("#tt2").transition().duration("50").remove());
+    }
+    return update_hist;
+};
+
+// [kernelDensityEstimation(data, bandwith] returns the function x -> kde(x)
+//    for [data]. The kernel function used is a gaussian.
+function kernelDensityEstimation(X, bandwidth) {
+    //gaussian constante
+    const a = 1/(2*bandwidth*bandwidth);
+    const b = bandwidth * SQRT_2PI;
+    const gaussianKernel =
+	  function (x) {
+	      return Math.exp(-a * x * x) / b;
+	  };
+
+    return function (x) {
+        let i = 0;
+        let sum = 0;
+        for (i = 0; i < X.length; i++) {
+	    sum += gaussianKernel(x - X[i])/X.length;
+        }
+	return sum ;
+    };
+}
+
+// [plot_kde(container, data, bandwidth, xscale, yscale, x)] draws
+// the kde function computes with [kde(data, bandwidth)]
+// for the abscisse values defined by [x], in the html element
+// [container].
+//
+// Axis are already defined on [container], using [xscale] and
+// [yscale].
+//
+// In addition, this function returns the update function that
+// redraw the curve if called with a new bandwidth.
+function plot_kde(container, data, bandwidth, xscale, yscale, x) {
+    const n = x.length;
+    const kde = kernelDensityEstimation(data, bandwidth);
+    const density = new Array(n);
+
+    for (let i=0; i<n;i++){
+	let tmp = x[i] ;
+	density[i] = [tmp, kde(tmp)];
+    }
+
+    const graph = container
+	  .append('g')
+	  .append("path")
+	  .attr("class", "mypath")
+	  .datum(density)
+	  .attr("fill", "#4ECDC4")
+	  .attr("opacity", ".8")
+	  .attr("stroke", "#292F36")
+	  .attr("stroke-width", 1)
+	  .attr("stroke-linejoin", "round")
+	  .attr("d",
+		d3.line()
+		.curve(d3.curveBasis)
+		.x(d => xscale(d[0]))
+		.y(d => yscale(d[1])));
+
+    function update_kde(nbandwidth) {
+	let kde = kernelDensityEstimation(data, nbandwidth);
+
+	for (let i=0; i<n;i++){
+	    density[i][1] = kde(density[i][0]);
+	}
+
+	graph.datum(density)
+	    .transition()
+	    .duration(50)
+	    .attr("d",
+		  d3.line()
+		  .curve(d3.curveBasis)
+		  .x(d => xscale(d[0]))
+		  .y(d => yscale(d[1])));
+    };
+
+    return update_kde;
+};
+
+};
+
+
+var contents = null;
+contents = {"xLabel":"run","yLabel":"monotonic-clock","series":[{"name":"hash A 10","description":{"start":1,"sampling":1.01,"stabilize":true,"quota":500000000,"limit":2000,"instances":["minor-allocated","major-allocated","monotonic-clock"],"samples":737,"time":502890287},"dataset":[{"x":1,"y":808},{"x":2,"y":524},{"x":3,"y":632},{"x":4,"y":800},{"x":5,"y":952},{"x":6,"y":1080},{"x":7,"y":1224},{"x":8,"y":1376},{"x":9,"y":1524},{"x":10,"y":1676},{"x":11,"y":1836},{"x":12,"y":2000},{"x":13,"y":2164},{"x":14,"y":2304},{"x":15,"y":2460},{"x":16,"y":2588},{"x":17,"y":2760},{"x":18,"y":2880},{"x":19,"y":3068},{"x":20,"y":3224},{"x":21,"y":3352},{"x":22,"y":3488},{"x":23,"y":3672},{"x":24,"y":3780},{"x":25,"y":3940},{"x":26,"y":4112},{"x":27,"y":4268},{"x":28,"y":4384},{"x":29,"y":4544},{"x":30,"y":4708},{"x":31,"y":4840},{"x":32,"y":5044},{"x":33,"y":5160},{"x":34,"y":5292},{"x":35,"y":5520},{"x":36,"y":5592},{"x":37,"y":5748},{"x":38,"y":5904},{"x":39,"y":6028},{"x":40,"y":6244},{"x":41,"y":6368},{"x":42,"y":6488},{"x":43,"y":6636},{"x":44,"y":6784},{"x":45,"y":6944},{"x":46,"y":7088},{"x":47,"y":7236},{"x":48,"y":7396},{"x":49,"y":7540},{"x":50,"y":7692},{"x":51,"y":7840},{"x":52,"y":8020},{"x":53,"y":8132},{"x":54,"y":8292},{"x":55,"y":8556},{"x":56,"y":8592},{"x":57,"y":8744},{"x":58,"y":8984},{"x":59,"y":9088},{"x":60,"y":9268},{"x":61,"y":9392},{"x":62,"y":9572},{"x":63,"y":9644},{"x":64,"y":9884},{"x":65,"y":9956},{"x":66,"y":10096},{"x":67,"y":10308},{"x":68,"y":10440},{"x":69,"y":10616},{"x":70,"y":10756},{"x":71,"y":10924},{"x":72,"y":11004},{"x":73,"y":11248},{"x":74,"y":11368},{"x":75,"y":11504},{"x":76,"y":11664},{"x":77,"y":11848},{"x":78,"y":11968},{"x":79,"y":12116},{"x":80,"y":12216},{"x":81,"y":12352},{"x":82,"y":12564},{"x":83,"y":12700},{"x":84,"y":12864},{"x":85,"y":13024},{"x":86,"y":13168},{"x":87,"y":13324},{"x":88,"y":13464},{"x":89,"y":13648},{"x":90,"y":17404},{"x":91,"y":17624},{"x":92,"y":17832},{"x":93,"y":19500},{"x":94,"y":18164},{"x":95,"y":18444},{"x":96,"y":18336},{"x":97,"y":19872},{"x":98,"y":20000},{"x":99,"y":18864},{"x":100,"y":20304},{"x":101,"y":24032},{"x":102,"y":21736},{"x":103,"y":19436},{"x":104,"y":19824},{"x":105,"y":20992},{"x":106,"y":22380},{"x":107,"y":20080},{"x":108,"y":21504},{"x":109,"y":21516},{"x":110,"y":22876},{"x":111,"y":21932},{"x":112,"y":22020},{"x":113,"y":23348},{"x":114,"y":22220},{"x":115,"y":22440},{"x":116,"y":22680},{"x":117,"y":23764},{"x":118,"y":27420},{"x":119,"y":23128},{"x":120,"y":23280},{"x":121,"y":24704},{"x":122,"y":23616},{"x":123,"y":23764},{"x":124,"y":24988},{"x":125,"y":25384},{"x":126,"y":24120},{"x":127,"y":24272},{"x":128,"y":25716},{"x":129,"y":24552},{"x":130,"y":24668},{"x":131,"y":25972},{"x":132,"y":30168},{"x":133,"y":26776},{"x":134,"y":26520},{"x":135,"y":26876},{"x":136,"y":26744},{"x":137,"y":28288},{"x":138,"y":25892},{"x":139,"y":27388},{"x":140,"y":27560},{"x":141,"y":28900},{"x":142,"y":27952},{"x":143,"y":28044},{"x":144,"y":29036},{"x":145,"y":32696},{"x":146,"y":28504},{"x":147,"y":29604},{"x":148,"y":28776},{"x":149,"y":28852},{"x":150,"y":30132},{"x":151,"y":30456},{"x":152,"y":30564},{"x":153,"y":29496},{"x":154,"y":29860},{"x":155,"y":30844},{"x":156,"y":29936},{"x":157,"y":36088},{"x":158,"y":31332},{"x":159,"y":30360},{"x":160,"y":30696},{"x":161,"y":32860},{"x":162,"y":30828},{"x":163,"y":33292},{"x":164,"y":31240},{"x":165,"y":31320},{"x":166,"y":34028},{"x":167,"y":32744},{"x":168,"y":39068},{"x":169,"y":62164},{"x":170,"y":28500},{"x":171,"y":27016},{"x":172,"y":27224},{"x":173,"y":27320},{"x":174,"y":27552},{"x":175,"y":27636},{"x":176,"y":27792},{"x":177,"y":27904},{"x":178,"y":43800},{"x":179,"y":27216},{"x":180,"y":27328},{"x":181,"y":27436},{"x":182,"y":27612},{"x":183,"y":27768},{"x":184,"y":27916},{"x":185,"y":28028},{"x":186,"y":28176},{"x":187,"y":28364},{"x":188,"y":28496},{"x":189,"y":28680},{"x":190,"y":28792},{"x":191,"y":28980},{"x":192,"y":29092},{"x":193,"y":29256},{"x":194,"y":29400},{"x":195,"y":29536},{"x":196,"y":29700},{"x":197,"y":29824},{"x":198,"y":29988},{"x":199,"y":30156},{"x":200,"y":30324},{"x":202,"y":30612},{"x":204,"y":30924},{"x":206,"y":31216},{"x":208,"y":31592},{"x":210,"y":31776},{"x":212,"y":32120},{"x":214,"y":32404},{"x":216,"y":32736},{"x":218,"y":34280},{"x":220,"y":33328},{"x":222,"y":33596},{"x":224,"y":33904},{"x":226,"y":34424},{"x":228,"y":34536},{"x":230,"y":34784},{"x":232,"y":35136},{"x":234,"y":35436},{"x":236,"y":35736},{"x":238,"y":36016},{"x":240,"y":36300},{"x":242,"y":36576},{"x":244,"y":36944},{"x":246,"y":37232},{"x":248,"y":37520},{"x":250,"y":37832},{"x":252,"y":38132},{"x":254,"y":38424},{"x":256,"y":38736},{"x":258,"y":38992},{"x":260,"y":39344},{"x":262,"y":39612},{"x":264,"y":39936},{"x":266,"y":40228},{"x":268,"y":40504},{"x":270,"y":40804},{"x":272,"y":41164},{"x":274,"y":41448},{"x":276,"y":41724},{"x":278,"y":42848},{"x":280,"y":42324},{"x":282,"y":42628},{"x":284,"y":42920},{"x":286,"y":43208},{"x":288,"y":43500},{"x":290,"y":43860},{"x":292,"y":44100},{"x":294,"y":44392},{"x":296,"y":44704},{"x":298,"y":45132},{"x":300,"y":45376},{"x":303,"y":45888},{"x":306,"y":46312},{"x":309,"y":47008},{"x":312,"y":47372},{"x":315,"y":47972},{"x":318,"y":48092},{"x":321,"y":49184},{"x":324,"y":49232},{"x":327,"y":49892},{"x":330,"y":50400},{"x":333,"y":50788},{"x":336,"y":51072},{"x":339,"y":51356},{"x":342,"y":52876},{"x":345,"y":52568},{"x":348,"y":53020},{"x":351,"y":53440},{"x":354,"y":53892},{"x":357,"y":54356},{"x":360,"y":54912},{"x":363,"y":55160},{"x":366,"y":88748},{"x":369,"y":58668},{"x":372,"y":58440},{"x":375,"y":59340},{"x":378,"y":59656},{"x":381,"y":74668},{"x":384,"y":57972},{"x":387,"y":58524},{"x":390,"y":58972},{"x":393,"y":59384},{"x":396,"y":59764},{"x":399,"y":60212},{"x":402,"y":63316},{"x":406,"y":61328},{"x":410,"y":62216},{"x":414,"y":64452},{"x":418,"y":63044},{"x":422,"y":63708},{"x":426,"y":64364},{"x":430,"y":64872},{"x":434,"y":65520},{"x":438,"y":66072},{"x":442,"y":66660},{"x":446,"y":67244},{"x":450,"y":67896},{"x":454,"y":68672},{"x":458,"y":69148},{"x":462,"y":69780},{"x":466,"y":70240},{"x":470,"y":70996},{"x":474,"y":72760},{"x":478,"y":72508},{"x":482,"y":73328},{"x":486,"y":73664},{"x":490,"y":73940},{"x":494,"y":74560},{"x":498,"y":75412},{"x":502,"y":75940},{"x":507,"y":77296},{"x":512,"y":77952},{"x":517,"y":78364},{"x":522,"y":79204},{"x":527,"y":80256},{"x":532,"y":80544},{"x":537,"y":81624},{"x":542,"y":83676},{"x":547,"y":83540},{"x":552,"y":84052},{"x":557,"y":103796},{"x":562,"y":88588},{"x":567,"y":90204},{"x":572,"y":104696},{"x":577,"y":87256},{"x":582,"y":88156},{"x":587,"y":89556},{"x":592,"y":144184},{"x":597,"y":93584},{"x":602,"y":96356},{"x":608,"y":111976},{"x":614,"y":92848},{"x":620,"y":94248},{"x":626,"y":94328},{"x":632,"y":95608},{"x":638,"y":96104},{"x":644,"y":97056},{"x":650,"y":98104},{"x":656,"y":98820},{"x":662,"y":99740},{"x":668,"y":100616},{"x":674,"y":101644},{"x":680,"y":104304},{"x":686,"y":104000},{"x":692,"y":104500},{"x":698,"y":105304},{"x":704,"y":106404},{"x":711,"y":107952},{"x":718,"y":108928},{"x":725,"y":110512},{"x":732,"y":111320},{"x":739,"y":112364},{"x":746,"y":113660},{"x":753,"y":115852},{"x":760,"y":116192},{"x":767,"y":117140},{"x":774,"y":118380},{"x":781,"y":118432},{"x":788,"y":119864},{"x":795,"y":121440},{"x":802,"y":122636},{"x":810,"y":123968},{"x":818,"y":127264},{"x":826,"y":162680},{"x":834,"y":134116},{"x":842,"y":132180},{"x":850,"y":144344},{"x":858,"y":129164},{"x":866,"y":130508},{"x":874,"y":132108},{"x":882,"y":133200},{"x":890,"y":137340},{"x":898,"y":135560},{"x":906,"y":136764},{"x":915,"y":137936},{"x":924,"y":139284},{"x":933,"y":141104},{"x":942,"y":142332},{"x":951,"y":144648},{"x":960,"y":145504},{"x":969,"y":148000},{"x":978,"y":148328},{"x":987,"y":149936},{"x":996,"y":151400},{"x":1005,"y":152848},{"x":1015,"y":154092},{"x":1025,"y":155160},{"x":1035,"y":158232},{"x":1045,"y":159180},{"x":1055,"y":159636},{"x":1065,"y":175808},{"x":1075,"y":215480},{"x":1085,"y":186024},{"x":1095,"y":164908},{"x":1105,"y":190412},{"x":1116,"y":176048},{"x":1127,"y":188596},{"x":1138,"y":171724},{"x":1149,"y":173036},{"x":1160,"y":177412},{"x":1171,"y":178228},{"x":1182,"y":180636},{"x":1193,"y":181560},{"x":1204,"y":181672},{"x":1216,"y":183732},{"x":1228,"y":185428},{"x":1240,"y":186996},{"x":1252,"y":190884},{"x":1264,"y":195132},{"x":1276,"y":193168},{"x":1288,"y":195768},{"x":1300,"y":197724},{"x":1313,"y":230616},{"x":1326,"y":200720},{"x":1339,"y":201468},{"x":1352,"y":203396},{"x":1365,"y":205532},{"x":1378,"y":207764},{"x":1391,"y":209732},{"x":1404,"y":213188},{"x":1418,"y":214048},{"x":1432,"y":215440},{"x":1446,"y":218192},{"x":1460,"y":257880},{"x":1474,"y":253940},{"x":1488,"y":252528},{"x":1502,"y":247892},{"x":1517,"y":228664},{"x":1532,"y":230636},{"x":1547,"y":235316},{"x":1562,"y":253740},{"x":1577,"y":239068},{"x":1592,"y":239716},{"x":1607,"y":241856},{"x":1623,"y":246264},{"x":1639,"y":248620},{"x":1655,"y":249216},{"x":1671,"y":252072},{"x":1687,"y":254236},{"x":1703,"y":260840},{"x":1720,"y":260356},{"x":1737,"y":262468},{"x":1754,"y":264480},{"x":1771,"y":268176},{"x":1788,"y":271356},{"x":1805,"y":274208},{"x":1823,"y":303536},{"x":1841,"y":279468},{"x":1859,"y":280764},{"x":1877,"y":282624},{"x":1895,"y":305456},{"x":1913,"y":312588},{"x":1932,"y":293120},{"x":1951,"y":295200},{"x":1970,"y":297932},{"x":1989,"y":303976},{"x":2008,"y":306592},{"x":2028,"y":307648},{"x":2048,"y":322384},{"x":2068,"y":366532},{"x":2088,"y":332012},{"x":2108,"y":317368},{"x":2129,"y":320384},{"x":2150,"y":325776},{"x":2171,"y":326980},{"x":2192,"y":331232},{"x":2213,"y":336244},{"x":2235,"y":339840},{"x":2257,"y":342592},{"x":2279,"y":347888},{"x":2301,"y":390856},{"x":2324,"y":370628},{"x":2347,"y":381224},{"x":2370,"y":377300},{"x":2393,"y":360096},{"x":2416,"y":363532},{"x":2440,"y":369372},{"x":2464,"y":373172},{"x":2488,"y":387636},{"x":2512,"y":379308},{"x":2537,"y":381904},{"x":2562,"y":423252},{"x":2587,"y":416796},{"x":2612,"y":394008},{"x":2638,"y":398176},{"x":2664,"y":401908},{"x":2690,"y":406328},{"x":2716,"y":411112},{"x":2743,"y":421684},{"x":2770,"y":419716},{"x":2797,"y":424080},{"x":2824,"y":439460},{"x":2852,"y":429536},{"x":2880,"y":434200},{"x":2908,"y":440812},{"x":2937,"y":443872},{"x":2966,"y":450452},{"x":2995,"y":453492},{"x":3024,"y":456792},{"x":3054,"y":463468},{"x":3084,"y":509288},{"x":3114,"y":471492},{"x":3145,"y":475724},{"x":3176,"y":480800},{"x":3207,"y":489000},{"x":3239,"y":490836},{"x":3271,"y":500148},{"x":3303,"y":500892},{"x":3336,"y":515240},{"x":3369,"y":509460},{"x":3402,"y":512896},{"x":3436,"y":522616},{"x":3470,"y":525928},{"x":3504,"y":535524},{"x":3539,"y":539500},{"x":3574,"y":541024},{"x":3609,"y":551964},{"x":3645,"y":552744},{"x":3681,"y":580764},{"x":3717,"y":590528},{"x":3754,"y":566016},{"x":3791,"y":595208},{"x":3828,"y":581800},{"x":3866,"y":586608},{"x":3904,"y":587492},{"x":3943,"y":595524},{"x":3982,"y":599556},{"x":4021,"y":610604},{"x":4061,"y":617332},{"x":4101,"y":664392},{"x":4142,"y":646124},{"x":4183,"y":632704},{"x":4224,"y":647616},{"x":4266,"y":676496},{"x":4308,"y":669932},{"x":4351,"y":673512},{"x":4394,"y":666064},{"x":4437,"y":675948},{"x":4481,"y":678016},{"x":4525,"y":705412},{"x":4570,"y":715396},{"x":4615,"y":741456},{"x":4661,"y":719504},{"x":4707,"y":726976},{"x":4754,"y":716980},{"x":4801,"y":723832},{"x":4849,"y":741928},{"x":4897,"y":740088},{"x":4945,"y":748408},{"x":4994,"y":755852},{"x":5043,"y":766184},{"x":5093,"y":775472},{"x":5143,"y":830472},{"x":5194,"y":785588},{"x":5245,"y":839568},{"x":5297,"y":802220},{"x":5349,"y":811240},{"x":5402,"y":825356},{"x":5456,"y":829148},{"x":5510,"y":844568},{"x":5565,"y":891168},{"x":5620,"y":859320},{"x":5676,"y":856788},{"x":5732,"y":865376},{"x":5789,"y":878608},{"x":5846,"y":886804},{"x":5904,"y":922192},{"x":5963,"y":921460},{"x":6022,"y":951524},{"x":6082,"y":924324},{"x":6142,"y":949672},{"x":6203,"y":936680},{"x":6265,"y":945504},{"x":6327,"y":955092},{"x":6390,"y":989488},{"x":6453,"y":972672},{"x":6517,"y":986152},{"x":6582,"y":997676},{"x":6647,"y":1014772},{"x":6713,"y":1100252},{"x":6780,"y":1075116},{"x":6847,"y":1041848},{"x":6915,"y":1064416},{"x":6984,"y":1055640},{"x":7053,"y":1065848},{"x":7123,"y":1081772},{"x":7194,"y":1094936},{"x":7265,"y":1141152},{"x":7337,"y":1113556},{"x":7410,"y":1149808},{"x":7484,"y":1137048},{"x":7558,"y":1140392},{"x":7633,"y":1197616},{"x":7709,"y":1237384},{"x":7786,"y":1187336},{"x":7863,"y":1186764},{"x":7941,"y":1211780},{"x":8020,"y":1213120},{"x":8100,"y":1263632},{"x":8181,"y":1286304},{"x":8262,"y":1249588},{"x":8344,"y":1265700},{"x":8427,"y":1284820},{"x":8511,"y":1352016},{"x":8596,"y":1297484},{"x":8681,"y":1324148},{"x":8767,"y":1385520},{"x":8854,"y":1340044},{"x":8942,"y":1367536},{"x":9031,"y":1368848},{"x":9121,"y":1391708},{"x":9212,"y":1423104},{"x":9304,"y":1412056},{"x":9397,"y":1432388},{"x":9490,"y":1453944},{"x":9584,"y":1454244},{"x":9679,"y":1475932},{"x":9775,"y":1539776},{"x":9872,"y":1503372},{"x":9970,"y":1530992},{"x":10069,"y":1576380},{"x":10169,"y":1542500},{"x":10270,"y":1571628},{"x":10372,"y":1582756},{"x":10475,"y":1633528},{"x":10579,"y":1615748},{"x":10684,"y":1629760},{"x":10790,"y":1710120},{"x":10897,"y":1652056},{"x":11005,"y":1711644},{"x":11115,"y":1749092},{"x":11226,"y":1731716},{"x":11338,"y":1778848},{"x":11451,"y":1749712},{"x":11565,"y":1815960},{"x":11680,"y":1793304},{"x":11796,"y":1799492},{"x":11913,"y":1813544},{"x":12032,"y":1844688},{"x":12152,"y":1847364},{"x":12273,"y":1944420},{"x":12395,"y":1911828},{"x":12518,"y":1908192},{"x":12643,"y":2007828},{"x":12769,"y":2028332},{"x":12896,"y":1970408},{"x":13024,"y":1967392},{"x":13154,"y":2017088},{"x":13285,"y":2024724},{"x":13417,"y":2020836},{"x":13551,"y":2045240},{"x":13686,"y":2057788},{"x":13822,"y":2096200},{"x":13960,"y":2108544},{"x":14099,"y":2216500},{"x":14239,"y":2139888},{"x":14381,"y":2168732},{"x":14524,"y":2233192},{"x":14669,"y":2282388},{"x":14815,"y":2248804},{"x":14963,"y":2383152},{"x":15112,"y":2357208},{"x":15263,"y":2364984},{"x":15415,"y":2443720},{"x":15569,"y":2363972},{"x":15724,"y":2406468},{"x":15881,"y":2461060},{"x":16039,"y":2566004},{"x":16199,"y":2509280},{"x":16360,"y":2484632},{"x":16523,"y":2518520},{"x":16688,"y":2544648},{"x":16854,"y":2553372},{"x":17022,"y":2643564},{"x":17192,"y":2662424},{"x":17363,"y":2715328},{"x":17536,"y":2711120},{"x":17711,"y":2794924},{"x":17888,"y":2711784},{"x":18066,"y":2803564},{"x":18246,"y":2839564},{"x":18428,"y":2781220},{"x":18612,"y":2852172},{"x":18798,"y":2829688},{"x":18985,"y":2863212},{"x":19174,"y":2882516},{"x":19365,"y":2957988},{"x":19558,"y":2997896},{"x":19753,"y":2974056},{"x":19950,"y":3046036},{"x":20149,"y":3089204},{"x":20350,"y":3089488},{"x":20553,"y":3181516},{"x":20758,"y":3124860},{"x":20965,"y":3212392},{"x":21174,"y":3198300},{"x":21385,"y":3226432},{"x":21598,"y":3263536},{"x":21813,"y":3288408},{"x":22031,"y":3360896},{"x":22251,"y":3364644},{"x":22473,"y":3441516},{"x":22697,"y":3421328},{"x":22923,"y":3594744},{"x":23152,"y":3559480},{"x":23383,"y":3564492},{"x":23616,"y":3564772},{"x":23852,"y":3586736},{"x":24090,"y":3685680},{"x":24330,"y":3707952},{"x":24573,"y":3698204},{"x":24818,"y":3842016},{"x":25066,"y":3772008},{"x":25316,"y":3814328},{"x":25569,"y":4025960},{"x":25824,"y":3940600},{"x":26082,"y":3928064},{"x":26342,"y":3969744},{"x":26605,"y":4003544},{"x":26871,"y":4068196},{"x":27139,"y":4201224},{"x":27410,"y":4125444},{"x":27684,"y":4218712},{"x":27960,"y":4270732},{"x":28239,"y":4366548},{"x":28521,"y":4360748},{"x":28806,"y":4469892},{"x":29094,"y":4518000},{"x":29384,"y":4472604},{"x":29677,"y":4515164},{"x":29973,"y":4557152},{"x":30272,"y":4566376},{"x":30574,"y":4643288},{"x":30879,"y":4654332},{"x":31187,"y":4788076},{"x":31498,"y":4873960},{"x":31812,"y":4841176},{"x":32130,"y":4833360}],"kde":[588,352,336,316,312,316,336,324,328,316,316,344,324,312,312,324,340,308,316,316,340,316,312,332,336,320,312,328,332,324,324,316,312,316,312,312,320,308,320,320,324,308,316,320,352,340,320,312,332,324,324,328,312,424,348,320,316,324,324,328,312,324,308,312,320,316,320,324,324,324,324,320,320,312,340,320,320,316,320,348,316,312,320,316,320,316,316,324,320,340,332,320,312,316,348,328,316,308,324,344,312,324,328,320,320,356,312,316,320,344,336,324,328,316,316,324,324,324,320,344,328,320,316,352,320,348,312,320,316,324,344,320,324,328,320,320,320,324,308,328,328,336,328,320,324,324,320,316,328,328,320,324,328,320,344,340,312,312,324,344,324,308,320,360,336,320,316,320,344,316,320,320,352,320,332,324,320,336,316,336,312,316,316,320,356,356,332,324,312,364,336,316,324,320,308,324,340,320,316,320,320,324,312,324,320,356,324,328,320,328,356,324,324,348,320,316,328,332,352,316,316,340,348,320,320,348,320,344,312,316,316,312,344,324,320,324,316,332,336,320,320,320,336,316,312,320,336,352,320,308,324,312,320,320,324,316,312,352,332,328,316,316,336,328,364,324,320,324,352,320,312,336,316,340,316,320,316,320,316,324,336,320,312,328,332,316,316,340,356,324,320,316,324,328,316,316,312,316,320,320,320,320,320,344,328,332,320,308,308,336,308,316,312,360,368,312,324,320,324,348,316,312,320,328,344,352,328,324,324,328,340,356,324,320,332,320,344,312,328,324,320,312,316,324,320,352,332,324,312,336,320,328,320,316,308,320,320,308,320,320,316,316,320,320,320,320,320,324,316,344,352,320,344,320,320,316,320,316,316,312,320,308,344,320,320,324,320,316,316,336,320,344,316,332,312,320,344,324,352,316,324,320,316,344,316,324,316,328,308,332,332,312,320,312,320,320,324,308,340,316,316,320,312,312,316,328,328,320,320,320,324,328,312,336,316,320,320,312,312,320,320,312,316,312,312,320,324,308,316,316,316,320,328,316,316,336,336,320,316,308,344,316,312,312,324,328,312,316,316,316,316,320,324,328,312,316,316,328,316,316,312,328,352,316,312,320,316,344,312,316,312,320,312,332,340,316,312,344,328,344,316,320,320,316,336,320,316,316,320,320,312,316,312,312,324,344,308,316,324,348,368,344,312,332,348,324,312,320,316,336,316,312,316,316,340,324,320,316,316,360,328,316,312,316,356,320,312,312,320,336,316,320,312,320,336,312,312,320,320,308,336,348,352,320,316,328,328,320,316,332,320,336,316,312,316,312,312,312,316,320,312,344,328,344,344,324,348,312,324,320,320,344,312,316,316,312,344,324,316,320,324,320,328,320,316,320,316,324,324,316,312,328,352,324,316,324,312,304,308,324,320,320,316,320,332,320,320,316,328,316,316,324,320,356,332,332,316,324,344,320,324,328,344,316,324,340,320,344,332,324,324,312,320,320,324,308,312,324,320,320,324,320,312,320,348,352,340,320,312,320,316,316,316,312,340,312,316,316,316,312,316,312,320,324,316,324,352,324,320,352,344,328,344,324,316,332,324,320,316,320,316,352,316,316,320,312,316,320,332,340,312,320,332,340,316,316,324,316,320,312,320,328,320,332,320,312,324,324,328,332,324,308,320,336,320,316,324,328,328,312,324,320,312,324,312,316,320,328,348,340,320,320,308,352,336,320,316,308,368,340,316,316,320,320,340,320,320,324,332,324,328,312,320,316,328,328,372,336,316,332,316,320,312,324,320,316,356,320,316,316,324,352,332,316,312,320,328,316,344,320,340,312,316,344,328,324,316,320,348,320,12016,684,504,624,316,320,324,320,348,316,320,332,316,348,312,380,332,312,320,352,328,316,316,356,340,320,316,340,320,324,312,316,332,316,312,316,360,348,316,312,352,316,312,312,356,320,320,312,344,340,312,320,316,324,316,312,312,332,328,336,320,336,320,320,348,336,324,320,316,340,328,312,312,312,368,312,312,312,336,348,312,316,332,332,344,312,340,332,320,352,340,332,316,324,316,328,332,316,316,344,324,316,320,352,336,316,368,356,316,316,320,392,328,312,312,316,344,316,320,312,344,324,316,308,324,320,316,320,312,344,316,312,316,320,340,316,308,320,316,304,344,316,316,312,316,336,316,316,312,308,316,340,320,312,328,316,312,312,332,316,308,316,320,316,316,312,312,356,316,320,316,312,320,316,324,328,316,312,312,328,320,308,316,332,316,316,320,320,308,316],"result":{"estimate":152.8721471669535,"r_square":0.9996773497965221}},{"name":"hash B 10","description":{"start":1,"sampling":1.01,"stabilize":true,"quota":500000000,"limit":2000,"instances":["minor-allocated","major-allocated","monotonic-clock"],"samples":746,"time":502008448},"dataset":[{"x":1,"y":696},{"x":2,"y":500},{"x":3,"y":596},{"x":4,"y":728},{"x":5,"y":856},{"x":6,"y":996},{"x":7,"y":1144},{"x":8,"y":1272},{"x":9,"y":1404},{"x":10,"y":1540},{"x":11,"y":1688},{"x":12,"y":1824},{"x":13,"y":1952},{"x":14,"y":2088},{"x":15,"y":2228},{"x":16,"y":2364},{"x":17,"y":2504},{"x":18,"y":2640},{"x":19,"y":2768},{"x":20,"y":2920},{"x":21,"y":3044},{"x":22,"y":3180},{"x":23,"y":3324},{"x":24,"y":3464},{"x":25,"y":3588},{"x":26,"y":3724},{"x":27,"y":3864},{"x":28,"y":4028},{"x":29,"y":4144},{"x":30,"y":4276},{"x":31,"y":4436},{"x":32,"y":4584},{"x":33,"y":4688},{"x":34,"y":4848},{"x":35,"y":5040},{"x":36,"y":5116},{"x":37,"y":5236},{"x":38,"y":5376},{"x":39,"y":5512},{"x":40,"y":5672},{"x":41,"y":5784},{"x":42,"y":5920},{"x":43,"y":6060},{"x":44,"y":6188},{"x":45,"y":6332},{"x":46,"y":6484},{"x":47,"y":6600},{"x":48,"y":6764},{"x":49,"y":6884},{"x":50,"y":7036},{"x":51,"y":7156},{"x":52,"y":7336},{"x":53,"y":7488},{"x":54,"y":7592},{"x":55,"y":7696},{"x":56,"y":7840},{"x":57,"y":8064},{"x":58,"y":8140},{"x":59,"y":8248},{"x":60,"y":8480},{"x":61,"y":8548},{"x":62,"y":8664},{"x":63,"y":8924},{"x":64,"y":8948},{"x":65,"y":9172},{"x":66,"y":9200},{"x":67,"y":9448},{"x":68,"y":9472},{"x":69,"y":9688},{"x":70,"y":9804},{"x":71,"y":9976},{"x":72,"y":10156},{"x":73,"y":10168},{"x":74,"y":10404},{"x":75,"y":10528},{"x":76,"y":10588},{"x":77,"y":10808},{"x":78,"y":10972},{"x":79,"y":10980},{"x":80,"y":11124},{"x":81,"y":11372},{"x":82,"y":11480},{"x":83,"y":11612},{"x":84,"y":11800},{"x":85,"y":11884},{"x":86,"y":11944},{"x":87,"y":12104},{"x":88,"y":12288},{"x":89,"y":12464},{"x":90,"y":12588},{"x":91,"y":12732},{"x":92,"y":12884},{"x":93,"y":12976},{"x":94,"y":13140},{"x":95,"y":13304},{"x":96,"y":13424},{"x":97,"y":13520},{"x":98,"y":13688},{"x":99,"y":13820},{"x":100,"y":13972},{"x":101,"y":14096},{"x":102,"y":14248},{"x":103,"y":14364},{"x":104,"y":14508},{"x":105,"y":14648},{"x":106,"y":14760},{"x":107,"y":14936},{"x":108,"y":15024},{"x":109,"y":15164},{"x":110,"y":15324},{"x":111,"y":15480},{"x":112,"y":15612},{"x":113,"y":15708},{"x":114,"y":15848},{"x":115,"y":16040},{"x":116,"y":16156},{"x":117,"y":16288},{"x":118,"y":16788},{"x":119,"y":16540},{"x":120,"y":16680},{"x":121,"y":16836},{"x":122,"y":16976},{"x":123,"y":17120},{"x":124,"y":17232},{"x":125,"y":17384},{"x":126,"y":17516},{"x":127,"y":17664},{"x":128,"y":17800},{"x":129,"y":17936},{"x":130,"y":18084},{"x":131,"y":18216},{"x":132,"y":18332},{"x":133,"y":18452},{"x":134,"y":18608},{"x":135,"y":18744},{"x":136,"y":18860},{"x":137,"y":19000},{"x":138,"y":19124},{"x":139,"y":19280},{"x":140,"y":19456},{"x":141,"y":19564},{"x":142,"y":19692},{"x":143,"y":19848},{"x":144,"y":19972},{"x":145,"y":20108},{"x":146,"y":20260},{"x":147,"y":20368},{"x":148,"y":20540},{"x":149,"y":20656},{"x":150,"y":20808},{"x":151,"y":20952},{"x":152,"y":21056},{"x":153,"y":21204},{"x":154,"y":21392},{"x":155,"y":21504},{"x":156,"y":21620},{"x":157,"y":21748},{"x":158,"y":21912},{"x":159,"y":22056},{"x":160,"y":22188},{"x":161,"y":22320},{"x":162,"y":22452},{"x":163,"y":22616},{"x":164,"y":22708},{"x":165,"y":22868},{"x":166,"y":22984},{"x":167,"y":23140},{"x":168,"y":23260},{"x":169,"y":23384},{"x":170,"y":24776},{"x":171,"y":23672},{"x":172,"y":23792},{"x":173,"y":23920},{"x":174,"y":24104},{"x":175,"y":24232},{"x":176,"y":24360},{"x":177,"y":24508},{"x":178,"y":24636},{"x":179,"y":24824},{"x":180,"y":24904},{"x":181,"y":25064},{"x":182,"y":25176},{"x":183,"y":25336},{"x":184,"y":25464},{"x":185,"y":25580},{"x":186,"y":25744},{"x":187,"y":25872},{"x":188,"y":26016},{"x":189,"y":26144},{"x":190,"y":26276},{"x":191,"y":26384},{"x":192,"y":26564},{"x":193,"y":26684},{"x":194,"y":26808},{"x":195,"y":26960},{"x":196,"y":27080},{"x":197,"y":27220},{"x":198,"y":27364},{"x":199,"y":27540},{"x":200,"y":27628},{"x":202,"y":27920},{"x":204,"y":28160},{"x":206,"y":28472},{"x":208,"y":28732},{"x":210,"y":29016},{"x":212,"y":29272},{"x":214,"y":29596},{"x":216,"y":29820},{"x":218,"y":30804},{"x":220,"y":61832},{"x":222,"y":31844},{"x":224,"y":32140},{"x":226,"y":32472},{"x":228,"y":32724},{"x":230,"y":33000},{"x":232,"y":33320},{"x":234,"y":33584},{"x":236,"y":49908},{"x":238,"y":32840},{"x":240,"y":33112},{"x":242,"y":33432},{"x":244,"y":33624},{"x":246,"y":33932},{"x":248,"y":34184},{"x":250,"y":34484},{"x":252,"y":34764},{"x":254,"y":53132},{"x":256,"y":36696},{"x":258,"y":36984},{"x":260,"y":37264},{"x":262,"y":37584},{"x":264,"y":37840},{"x":266,"y":38136},{"x":268,"y":38392},{"x":270,"y":38696},{"x":272,"y":38976},{"x":274,"y":55372},{"x":276,"y":38036},{"x":278,"y":39312},{"x":280,"y":38612},{"x":282,"y":38852},{"x":284,"y":39152},{"x":286,"y":39420},{"x":288,"y":39704},{"x":290,"y":40004},{"x":292,"y":40236},{"x":294,"y":40492},{"x":296,"y":40796},{"x":298,"y":41060},{"x":300,"y":41320},{"x":303,"y":41740},{"x":306,"y":42176},{"x":309,"y":42588},{"x":312,"y":42976},{"x":315,"y":43384},{"x":318,"y":43780},{"x":321,"y":44212},{"x":324,"y":44644},{"x":327,"y":45044},{"x":330,"y":45392},{"x":333,"y":45876},{"x":336,"y":46256},{"x":339,"y":46656},{"x":342,"y":48000},{"x":345,"y":47500},{"x":348,"y":47884},{"x":351,"y":48296},{"x":354,"y":48724},{"x":357,"y":49112},{"x":360,"y":49536},{"x":363,"y":49960},{"x":366,"y":50328},{"x":369,"y":50748},{"x":372,"y":51192},{"x":375,"y":51568},{"x":378,"y":52016},{"x":381,"y":52404},{"x":384,"y":52812},{"x":387,"y":53216},{"x":390,"y":53656},{"x":393,"y":54056},{"x":396,"y":54484},{"x":399,"y":54844},{"x":402,"y":55928},{"x":406,"y":55816},{"x":410,"y":56372},{"x":414,"y":56900},{"x":418,"y":57476},{"x":422,"y":58044},{"x":426,"y":58536},{"x":430,"y":59108},{"x":434,"y":59656},{"x":438,"y":60160},{"x":442,"y":60764},{"x":446,"y":61292},{"x":450,"y":67952},{"x":454,"y":65824},{"x":458,"y":62936},{"x":462,"y":63604},{"x":466,"y":64032},{"x":470,"y":64588},{"x":474,"y":65788},{"x":478,"y":65712},{"x":482,"y":66204},{"x":486,"y":66728},{"x":490,"y":82712},{"x":494,"y":71876},{"x":498,"y":68440},{"x":502,"y":68912},{"x":507,"y":69648},{"x":512,"y":70312},{"x":517,"y":71040},{"x":522,"y":71612},{"x":527,"y":72360},{"x":532,"y":73080},{"x":537,"y":73744},{"x":542,"y":93168},{"x":547,"y":78136},{"x":552,"y":78820},{"x":557,"y":98184},{"x":562,"y":80684},{"x":567,"y":77836},{"x":572,"y":78560},{"x":577,"y":79212},{"x":582,"y":79884},{"x":587,"y":80620},{"x":592,"y":81272},{"x":597,"y":81972},{"x":602,"y":82652},{"x":608,"y":84220},{"x":614,"y":84256},{"x":620,"y":85076},{"x":626,"y":85876},{"x":632,"y":86700},{"x":638,"y":87556},{"x":644,"y":88420},{"x":650,"y":89208},{"x":656,"y":90024},{"x":662,"y":90844},{"x":668,"y":91628},{"x":674,"y":111332},{"x":680,"y":98136},{"x":686,"y":97944},{"x":692,"y":130712},{"x":698,"y":99580},{"x":704,"y":104872},{"x":711,"y":101440},{"x":718,"y":102480},{"x":725,"y":103456},{"x":732,"y":104464},{"x":739,"y":117776},{"x":746,"y":102328},{"x":753,"y":103668},{"x":760,"y":104240},{"x":767,"y":105220},{"x":774,"y":106228},{"x":781,"y":107132},{"x":788,"y":108092},{"x":795,"y":129828},{"x":802,"y":114384},{"x":810,"y":130080},{"x":818,"y":112968},{"x":826,"y":113324},{"x":834,"y":114488},{"x":842,"y":115460},{"x":850,"y":116508},{"x":858,"y":117644},{"x":866,"y":118776},{"x":874,"y":119816},{"x":882,"y":121004},{"x":890,"y":122544},{"x":898,"y":123140},{"x":906,"y":124216},{"x":915,"y":125456},{"x":924,"y":126692},{"x":933,"y":127984},{"x":942,"y":148768},{"x":951,"y":135548},{"x":960,"y":151832},{"x":969,"y":155828},{"x":978,"y":139500},{"x":987,"y":155984},{"x":996,"y":136536},{"x":1005,"y":137792},{"x":1015,"y":139120},{"x":1025,"y":140536},{"x":1035,"y":142328},{"x":1045,"y":143240},{"x":1055,"y":144616},{"x":1065,"y":145936},{"x":1075,"y":147336},{"x":1085,"y":148736},{"x":1095,"y":150096},{"x":1105,"y":152260},{"x":1116,"y":152992},{"x":1127,"y":154500},{"x":1138,"y":155976},{"x":1149,"y":157488},{"x":1160,"y":158960},{"x":1171,"y":160476},{"x":1182,"y":162520},{"x":1193,"y":183288},{"x":1204,"y":171620},{"x":1216,"y":182928},{"x":1228,"y":168268},{"x":1240,"y":194108},{"x":1252,"y":179340},{"x":1264,"y":180180},{"x":1276,"y":192248},{"x":1288,"y":176504},{"x":1300,"y":178100},{"x":1313,"y":179896},{"x":1326,"y":182064},{"x":1339,"y":183500},{"x":1352,"y":185224},{"x":1365,"y":187052},{"x":1378,"y":188772},{"x":1391,"y":190616},{"x":1404,"y":193100},{"x":1418,"y":194320},{"x":1432,"y":196200},{"x":1446,"y":198104},{"x":1460,"y":200020},{"x":1474,"y":204712},{"x":1488,"y":203904},{"x":1502,"y":205796},{"x":1517,"y":235032},{"x":1532,"y":236288},{"x":1547,"y":212816},{"x":1562,"y":213980},{"x":1577,"y":216036},{"x":1592,"y":218088},{"x":1607,"y":220172},{"x":1623,"y":222952},{"x":1639,"y":224496},{"x":1655,"y":226716},{"x":1671,"y":228936},{"x":1687,"y":231120},{"x":1703,"y":233948},{"x":1720,"y":235688},{"x":1737,"y":262068},{"x":1754,"y":258524},{"x":1771,"y":262472},{"x":1788,"y":258224},{"x":1805,"y":271840},{"x":1823,"y":249704},{"x":1841,"y":274932},{"x":1859,"y":275548},{"x":1877,"y":257056},{"x":1895,"y":259544},{"x":1913,"y":262384},{"x":1932,"y":264696},{"x":1951,"y":285200},{"x":1970,"y":294544},{"x":1989,"y":273200},{"x":2008,"y":275180},{"x":2028,"y":277700},{"x":2048,"y":280532},{"x":2068,"y":313008},{"x":2088,"y":304824},{"x":2108,"y":288716},{"x":2129,"y":291564},{"x":2150,"y":295320},{"x":2171,"y":308856},{"x":2192,"y":301688},{"x":2213,"y":303788},{"x":2235,"y":306140},{"x":2257,"y":309084},{"x":2279,"y":312156},{"x":2301,"y":316116},{"x":2324,"y":335932},{"x":2347,"y":337836},{"x":2370,"y":342596},{"x":2393,"y":327692},{"x":2416,"y":330892},{"x":2440,"y":355608},{"x":2464,"y":365464},{"x":2488,"y":340736},{"x":2512,"y":344452},{"x":2537,"y":347404},{"x":2562,"y":350840},{"x":2587,"y":354932},{"x":2612,"y":385140},{"x":2638,"y":384408},{"x":2664,"y":365288},{"x":2690,"y":393824},{"x":2716,"y":402404},{"x":2743,"y":376568},{"x":2770,"y":379328},{"x":2797,"y":383000},{"x":2824,"y":419580},{"x":2852,"y":432280},{"x":2880,"y":443112},{"x":2908,"y":423180},{"x":2937,"y":402232},{"x":2966,"y":406604},{"x":2995,"y":410048},{"x":3024,"y":414036},{"x":3054,"y":419000},{"x":3084,"y":422240},{"x":3114,"y":428576},{"x":3145,"y":430588},{"x":3176,"y":490064},{"x":3207,"y":440076},{"x":3239,"y":443532},{"x":3271,"y":482140},{"x":3303,"y":470996},{"x":3336,"y":457484},{"x":3369,"y":461244},{"x":3402,"y":465808},{"x":3436,"y":492612},{"x":3470,"y":501588},{"x":3504,"y":514424},{"x":3539,"y":503924},{"x":3574,"y":489972},{"x":3609,"y":494084},{"x":3645,"y":542360},{"x":3681,"y":526424},{"x":3717,"y":557204},{"x":3754,"y":535120},{"x":3791,"y":519724},{"x":3828,"y":524128},{"x":3866,"y":533156},{"x":3904,"y":559648},{"x":3943,"y":558048},{"x":3982,"y":596344},{"x":4021,"y":595816},{"x":4061,"y":555924},{"x":4101,"y":584480},{"x":4142,"y":587628},{"x":4183,"y":573248},{"x":4224,"y":578140},{"x":4266,"y":652480},{"x":4308,"y":611968},{"x":4351,"y":614480},{"x":4394,"y":629364},{"x":4437,"y":607320},{"x":4481,"y":613796},{"x":4525,"y":619396},{"x":4570,"y":673600},{"x":4615,"y":632420},{"x":4661,"y":637992},{"x":4707,"y":645020},{"x":4754,"y":650748},{"x":4801,"y":657460},{"x":4849,"y":713792},{"x":4897,"y":670336},{"x":4945,"y":677488},{"x":4994,"y":706912},{"x":5043,"y":714720},{"x":5093,"y":697804},{"x":5143,"y":752568},{"x":5194,"y":715980},{"x":5245,"y":718888},{"x":5297,"y":725740},{"x":5349,"y":732112},{"x":5402,"y":743016},{"x":5456,"y":747628},{"x":5510,"y":754156},{"x":5565,"y":762276},{"x":5620,"y":769988},{"x":5676,"y":802428},{"x":5732,"y":849464},{"x":5789,"y":793080},{"x":5846,"y":800680},{"x":5904,"y":851328},{"x":5963,"y":846644},{"x":6022,"y":887160},{"x":6082,"y":850060},{"x":6142,"y":841340},{"x":6203,"y":916772},{"x":6265,"y":922960},{"x":6327,"y":911468},{"x":6390,"y":875232},{"x":6453,"y":926140},{"x":6517,"y":943840},{"x":6582,"y":908400},{"x":6647,"y":909696},{"x":6713,"y":926472},{"x":6780,"y":963676},{"x":6847,"y":963436},{"x":6915,"y":946744},{"x":6984,"y":956496},{"x":7053,"y":974608},{"x":7123,"y":1067244},{"x":7194,"y":984960},{"x":7265,"y":994944},{"x":7337,"y":1029212},{"x":7410,"y":1092376},{"x":7484,"y":1048700},{"x":7558,"y":1053808},{"x":7633,"y":1074844},{"x":7709,"y":1073276},{"x":7786,"y":1066292},{"x":7863,"y":1076372},{"x":7941,"y":1135112},{"x":8020,"y":1186120},{"x":8100,"y":1109188},{"x":8181,"y":1196856},{"x":8262,"y":1223444},{"x":8344,"y":1142784},{"x":8427,"y":1153892},{"x":8511,"y":1240024},{"x":8596,"y":1247116},{"x":8681,"y":1240060},{"x":8767,"y":1269508},{"x":8854,"y":1233388},{"x":8942,"y":1224668},{"x":9031,"y":1373608},{"x":9121,"y":1249004},{"x":9212,"y":1261232},{"x":9304,"y":1304632},{"x":9397,"y":1348904},{"x":9490,"y":1299000},{"x":9584,"y":1342060},{"x":9679,"y":1362324},{"x":9775,"y":1364440},{"x":9872,"y":1398548},{"x":9970,"y":1407300},{"x":10069,"y":1379216},{"x":10169,"y":1445464},{"x":10270,"y":1406304},{"x":10372,"y":1420580},{"x":10475,"y":1497832},{"x":10579,"y":1448068},{"x":10684,"y":1463268},{"x":10790,"y":1531796},{"x":10897,"y":1491720},{"x":11005,"y":1510080},{"x":11115,"y":1606896},{"x":11226,"y":1543800},{"x":11338,"y":1680092},{"x":11451,"y":1568652},{"x":11565,"y":1631448},{"x":11680,"y":1599720},{"x":11796,"y":1614632},{"x":11913,"y":1691896},{"x":12032,"y":1693812},{"x":12152,"y":1722996},{"x":12273,"y":1680340},{"x":12395,"y":1732300},{"x":12518,"y":1736168},{"x":12643,"y":1737672},{"x":12769,"y":1796932},{"x":12896,"y":1766160},{"x":13024,"y":1829572},{"x":13154,"y":1801044},{"x":13285,"y":1912984},{"x":13417,"y":1881388},{"x":13551,"y":1911044},{"x":13686,"y":1885264},{"x":13822,"y":1898832},{"x":13960,"y":1911588},{"x":14099,"y":1960344},{"x":14239,"y":2108832},{"x":14381,"y":2065920},{"x":14524,"y":1988820},{"x":14669,"y":2055532},{"x":14815,"y":2028512},{"x":14963,"y":2098852},{"x":15112,"y":2135108},{"x":15263,"y":2138164},{"x":15415,"y":2153088},{"x":15569,"y":2226608},{"x":15724,"y":2152676},{"x":15881,"y":2270120},{"x":16039,"y":2283144},{"x":16199,"y":2265768},{"x":16360,"y":2294556},{"x":16523,"y":2262980},{"x":16688,"y":2336400},{"x":16854,"y":2349848},{"x":17022,"y":2421352},{"x":17192,"y":2392136},{"x":17363,"y":2452400},{"x":17536,"y":2448328},{"x":17711,"y":2424744},{"x":17888,"y":2451580},{"x":18066,"y":2483476},{"x":18246,"y":2497764},{"x":18428,"y":2534148},{"x":18612,"y":2550432},{"x":18798,"y":2662580},{"x":18985,"y":2736700},{"x":19174,"y":2657040},{"x":19365,"y":2685216},{"x":19558,"y":2788356},{"x":19753,"y":2755156},{"x":19950,"y":2731520},{"x":20149,"y":2824760},{"x":20350,"y":2837704},{"x":20553,"y":2940368},{"x":20758,"y":2962728},{"x":20965,"y":2927332},{"x":21174,"y":3003584},{"x":21385,"y":2931252},{"x":21598,"y":3045748},{"x":21813,"y":3093728},{"x":22031,"y":3088392},{"x":22251,"y":3085564},{"x":22473,"y":3125392},{"x":22697,"y":3201708},{"x":22923,"y":3274620},{"x":23152,"y":3346968},{"x":23383,"y":3204012},{"x":23616,"y":3293452},{"x":23852,"y":3313736},{"x":24090,"y":3392824},{"x":24330,"y":3385744},{"x":24573,"y":3458392},{"x":24818,"y":3435708},{"x":25066,"y":3518720},{"x":25316,"y":3599336},{"x":25569,"y":3569676},{"x":25824,"y":3626972},{"x":26082,"y":3634668},{"x":26342,"y":3700084},{"x":26605,"y":3689448},{"x":26871,"y":3776548},{"x":27139,"y":3776712},{"x":27410,"y":3806844},{"x":27684,"y":3886788},{"x":27960,"y":3882476},{"x":28239,"y":3996656},{"x":28521,"y":3952940},{"x":28806,"y":3990972},{"x":29094,"y":4073112},{"x":29384,"y":4070064},{"x":29677,"y":4121372},{"x":29973,"y":4183728},{"x":30272,"y":4224072},{"x":30574,"y":4247060},{"x":30879,"y":4277636},{"x":31187,"y":4315340},{"x":31498,"y":4562424},{"x":31812,"y":4431300},{"x":32130,"y":4472212},{"x":32451,"y":4527476},{"x":32775,"y":4554536},{"x":33102,"y":4585888},{"x":33433,"y":4675456},{"x":33767,"y":4671728},{"x":34104,"y":4832576},{"x":34445,"y":4866944},{"x":34789,"y":4900108},{"x":35136,"y":4953692}],"kde":[524,340,344,300,304,300,300,336,300,328,312,304,304,304,304,308,300,308,300,324,308,300,304,320,304,300,300,304,308,296,300,304,304,304,304,304,308,300,312,304,320,300,304,304,316,304,304,304,316,308,300,304,344,304,300,304,296,300,300,308,320,308,332,304,300,300,304,304,300,316,296,304,304,328,304,304,308,304,328,300,304,308,312,328,304,312,308,308,332,300,316,308,304,332,304,300,328,304,300,332,304,304,308,320,332,304,308,312,304,292,296,324,304,304,304,312,300,304,300,300,300,300,304,328,304,300,300,308,332,304,300,300,300,328,308,300,316,296,332,304,308,300,300,300,300,304,300,304,320,312,292,308,332,324,304,304,300,328,316,308,308,304,324,308,304,300,308,336,304,320,308,300,336,304,316,308,304,340,304,312,348,320,300,308,304,336,304,312,308,304,328,324,304,304,308,316,312,300,300,304,308,304,308,312,328,304,336,308,308,312,304,312,324,304,304,344,324,308,300,300,368,312,308,308,308,332,308,304,308,304,332,304,312,308,308,304,308,312,328,304,300,320,328,304,300,312,304,308,308,332,348,316,308,336,324,304,308,308,340,308,304,308,304,332,308,312,304,312,340,304,300,300,300,336,300,324,328,304,300,316,308,296,300,304,300,300,304,304,308,304,300,300,304,304,312,336,316,304,300,304,296,304,296,304,316,332,300,308,308,300,304,304,304,304,300,304,316,316,332,300,300,320,308,324,300,312,368,312,316,304,308,328,308,308,296,300,300,316,304,296,304,316,308,304,300,300,316,336,304,300,312,300,292,296,296,296,300,300,304,328,312,304,316,312,300,324,304,308,316,308,320,364,304,308,300,304,304,324,312,304,308,308,308,320,308,304,304,304,336,308,300,304,316,356,308,308,308,308,304,300,304,308,308,300,316,320,304,304,304,324,308,308,312,308,304,308,312,300,332,300,312,304,316,300,308,320,312,308,296,312,316,312,332,304,316,304,308,304,340,308,308,308,308,304,312,308,308,320,328,304,304,308,312,328,308,316,300,304,308,312,304,308,308,304,304,312,336,312,312,308,304,340,312,300,304,304,312,300,308,304,312,296,304,312,304,296,304,304,312,324,304,300,300,316,300,308,304,312,304,308,304,308,308,304,312,340,312,304,312,320,348,308,304,344,324,312,300,304,332,304,312,304,308,328,308,304,300,308,316,328,300,328,304,340,304,304,312,308,324,316,304,308,304,332,312,296,300,304,332,304,340,328,324,312,304,348,328,344,316,308,316,308,296,304,308,304,308,308,312,304,308,304,324,320,336,304,304,316,312,308,304,324,308,304,304,316,304,304,312,308,304,308,300,320,312,308,304,320,304,312,304,308,304,312,304,300,308,300,304,324,296,304,308,312,312,320,308,308,320,312,304,304,304,324,308,308,300,320,308,312,336,304,308,304,304,300,300,300,308,320,324,348,320,312,332,304,332,312,312,308,312,312,304,300,300,304,312,304,304,304,320,316,332,304,304,324,312,304,304,312,312,304,308,312,332,304,308,308,308,320,304,320,312,312,340,300,320,312,308,300,308,328,312,304,304,304,300,296,304,308,312,304,304,340,300,304,304,308,344,308,304,304,312,332,312,304,304,304,340,304,308,304,300,344,324,300,296,300,316,336,304,308,312,300,328,304,312,304,300,308,308,304,300,312,304,356,304,308,312,312,328,304,304,316,308,304,312,364,304,308,304,312,308,304,312,324,324,304,328,308,312,308,300,332,308,308,308,332,304,308,304,308,304,336,304,308,304,328,324,300,304,344,308,300,308,312,304,304,300,308,312,304,304,300,304,304,340,312,324,300,308,336,320,304,312,300,320,308,304,328,308,308,300,304,336,308,308,308,316,320,336,304,312,332,340,304,312,308,308,324,304,312,304,308,332,312,308,308,312,328,308,312,308,324,312,352,320,308,444,308,312,308,344,312,304,304,340,316,304,308,312,328,308,308,320,320,316,304,308,332,312,296,308,308,304,308,336,304,312,312,300,324,304,296,300,316,328,300,300,300,352,308,308,304,336,304,304,304,308,328,308,316,304,304,304,332,312,324,312,304,304,324,308,308,304,360,316,312,304,308,304,308,316,312,312,304,336,320,304,308,308,332,316,360,304,308,312,340,304,304,300,312,340,308,308,312,308,300,304,320,308,308,308,336,312,308,304,304,348,320,304,308,344,324,308,300,308,308,332,308,332,300,300,304,344,304,304,300,336,308,308,312,312,328,316,304,340,308,304,300],"result":{"estimate":139.9420994802066,"r_square":0.9996530451340064}},{"name":"hash B 50","description":{"start":1,"sampling":1.01,"stabilize":true,"quota":500000000,"limit":2000,"instances":["minor-allocated","major-allocated","monotonic-clock"],"samples":593,"time":505401666},"dataset":[{"x":1,"y":1080},{"x":2,"y":1468},{"x":3,"y":2040},{"x":4,"y":2668},{"x":5,"y":3248},{"x":6,"y":3856},{"x":7,"y":4504},{"x":8,"y":5096},{"x":9,"y":5732},{"x":10,"y":6312},{"x":11,"y":6972},{"x":12,"y":7548},{"x":13,"y":8188},{"x":14,"y":8872},{"x":15,"y":9408},{"x":16,"y":10088},{"x":17,"y":10704},{"x":18,"y":11240},{"x":19,"y":11972},{"x":20,"y":12556},{"x":21,"y":13160},{"x":22,"y":13776},{"x":23,"y":14392},{"x":24,"y":15020},{"x":25,"y":15648},{"x":26,"y":16248},{"x":27,"y":16868},{"x":28,"y":17468},{"x":29,"y":18096},{"x":30,"y":18712},{"x":31,"y":19336},{"x":32,"y":19980},{"x":33,"y":20576},{"x":34,"y":21184},{"x":35,"y":22016},{"x":36,"y":22380},{"x":37,"y":23072},{"x":38,"y":23644},{"x":39,"y":24256},{"x":40,"y":24880},{"x":41,"y":25492},{"x":42,"y":26100},{"x":43,"y":26720},{"x":44,"y":27296},{"x":45,"y":27976},{"x":46,"y":28524},{"x":47,"y":29180},{"x":48,"y":29752},{"x":49,"y":30376},{"x":50,"y":30988},{"x":51,"y":31608},{"x":52,"y":32388},{"x":53,"y":32904},{"x":54,"y":33488},{"x":55,"y":34088},{"x":56,"y":34712},{"x":57,"y":35336},{"x":58,"y":35936},{"x":59,"y":36556},{"x":60,"y":37164},{"x":61,"y":37780},{"x":62,"y":38412},{"x":63,"y":39012},{"x":64,"y":39588},{"x":65,"y":40272},{"x":66,"y":40856},{"x":67,"y":41476},{"x":68,"y":42064},{"x":69,"y":42664},{"x":70,"y":43360},{"x":71,"y":43960},{"x":72,"y":44548},{"x":73,"y":45140},{"x":74,"y":45776},{"x":75,"y":46392},{"x":76,"y":47060},{"x":77,"y":47624},{"x":78,"y":48248},{"x":79,"y":48820},{"x":80,"y":49484},{"x":81,"y":50072},{"x":82,"y":50704},{"x":83,"y":51284},{"x":84,"y":51924},{"x":85,"y":52564},{"x":86,"y":53148},{"x":87,"y":53760},{"x":88,"y":54384},{"x":89,"y":55052},{"x":90,"y":55624},{"x":91,"y":56248},{"x":92,"y":56808},{"x":93,"y":57532},{"x":94,"y":77540},{"x":95,"y":61072},{"x":96,"y":61688},{"x":97,"y":62360},{"x":98,"y":65948},{"x":99,"y":63724},{"x":100,"y":64240},{"x":101,"y":64968},{"x":102,"y":65508},{"x":103,"y":66184},{"x":104,"y":66772},{"x":105,"y":83028},{"x":106,"y":65604},{"x":107,"y":66064},{"x":108,"y":66680},{"x":109,"y":67376},{"x":110,"y":67904},{"x":111,"y":68504},{"x":112,"y":69116},{"x":113,"y":69744},{"x":114,"y":70380},{"x":115,"y":70996},{"x":116,"y":71616},{"x":117,"y":102048},{"x":118,"y":76456},{"x":119,"y":76404},{"x":120,"y":94816},{"x":121,"y":74708},{"x":122,"y":75268},{"x":123,"y":75872},{"x":124,"y":76544},{"x":125,"y":77120},{"x":126,"y":77792},{"x":127,"y":78388},{"x":128,"y":78976},{"x":129,"y":79604},{"x":130,"y":80236},{"x":131,"y":80820},{"x":132,"y":81460},{"x":133,"y":99948},{"x":134,"y":85992},{"x":135,"y":86612},{"x":136,"y":102172},{"x":137,"y":84488},{"x":138,"y":85144},{"x":139,"y":85756},{"x":140,"y":86364},{"x":141,"y":86996},{"x":142,"y":87636},{"x":143,"y":88216},{"x":144,"y":88844},{"x":145,"y":89460},{"x":146,"y":90080},{"x":147,"y":90640},{"x":148,"y":119636},{"x":149,"y":95640},{"x":150,"y":96364},{"x":151,"y":113184},{"x":152,"y":93808},{"x":153,"y":94412},{"x":154,"y":95584},{"x":155,"y":95760},{"x":156,"y":96240},{"x":157,"y":96844},{"x":158,"y":97464},{"x":159,"y":98064},{"x":160,"y":98668},{"x":161,"y":99292},{"x":162,"y":99888},{"x":163,"y":100588},{"x":164,"y":101160},{"x":165,"y":101732},{"x":166,"y":102356},{"x":167,"y":102952},{"x":168,"y":103604},{"x":169,"y":104216},{"x":170,"y":106040},{"x":171,"y":105476},{"x":172,"y":106076},{"x":173,"y":106668},{"x":174,"y":107428},{"x":175,"y":107900},{"x":176,"y":108508},{"x":177,"y":109108},{"x":178,"y":109780},{"x":179,"y":110580},{"x":180,"y":110960},{"x":181,"y":111580},{"x":182,"y":112180},{"x":183,"y":112812},{"x":184,"y":113436},{"x":185,"y":114040},{"x":186,"y":135936},{"x":187,"y":119888},{"x":188,"y":120600},{"x":189,"y":133884},{"x":190,"y":117152},{"x":191,"y":117728},{"x":192,"y":118324},{"x":193,"y":118976},{"x":194,"y":119572},{"x":195,"y":120200},{"x":196,"y":120808},{"x":197,"y":121432},{"x":198,"y":122072},{"x":199,"y":122644},{"x":200,"y":123288},{"x":202,"y":124484},{"x":204,"y":125740},{"x":206,"y":127012},{"x":208,"y":128176},{"x":210,"y":129428},{"x":212,"y":130672},{"x":214,"y":131916},{"x":216,"y":133068},{"x":218,"y":135460},{"x":220,"y":135592},{"x":222,"y":136800},{"x":224,"y":138032},{"x":226,"y":139256},{"x":228,"y":140472},{"x":230,"y":141708},{"x":232,"y":142960},{"x":234,"y":165452},{"x":236,"y":151256},{"x":238,"y":166788},{"x":240,"y":147936},{"x":242,"y":149084},{"x":244,"y":150328},{"x":246,"y":151560},{"x":248,"y":152804},{"x":250,"y":154008},{"x":252,"y":155272},{"x":254,"y":156480},{"x":256,"y":157712},{"x":258,"y":158972},{"x":260,"y":181496},{"x":262,"y":182984},{"x":264,"y":162616},{"x":266,"y":163832},{"x":268,"y":165060},{"x":270,"y":166332},{"x":272,"y":167552},{"x":274,"y":168780},{"x":276,"y":170016},{"x":278,"y":172124},{"x":280,"y":172472},{"x":282,"y":173736},{"x":284,"y":210728},{"x":286,"y":197892},{"x":288,"y":177444},{"x":290,"y":178840},{"x":292,"y":179840},{"x":294,"y":181104},{"x":296,"y":182288},{"x":298,"y":183592},{"x":300,"y":184784},{"x":303,"y":186640},{"x":306,"y":188456},{"x":309,"y":190308},{"x":312,"y":192144},{"x":315,"y":193980},{"x":318,"y":195856},{"x":321,"y":197704},{"x":324,"y":199520},{"x":327,"y":220084},{"x":330,"y":226060},{"x":333,"y":205276},{"x":336,"y":228924},{"x":339,"y":217132},{"x":342,"y":228904},{"x":345,"y":212500},{"x":348,"y":214296},{"x":351,"y":216184},{"x":354,"y":217980},{"x":357,"y":219852},{"x":360,"y":221732},{"x":363,"y":223496},{"x":366,"y":225396},{"x":369,"y":227148},{"x":372,"y":229024},{"x":375,"y":230900},{"x":378,"y":232748},{"x":381,"y":234548},{"x":384,"y":236436},{"x":387,"y":238244},{"x":390,"y":269132},{"x":393,"y":251680},{"x":396,"y":261012},{"x":399,"y":245704},{"x":402,"y":248404},{"x":406,"y":249960},{"x":410,"y":252444},{"x":414,"y":259796},{"x":418,"y":257412},{"x":422,"y":264104},{"x":426,"y":262268},{"x":430,"y":264696},{"x":434,"y":267236},{"x":438,"y":269680},{"x":442,"y":272088},{"x":446,"y":277608},{"x":450,"y":277044},{"x":454,"y":279528},{"x":458,"y":281936},{"x":462,"y":284884},{"x":466,"y":286864},{"x":470,"y":289276},{"x":474,"y":292764},{"x":478,"y":294228},{"x":482,"y":296764},{"x":486,"y":299172},{"x":490,"y":301572},{"x":494,"y":304096},{"x":498,"y":306584},{"x":502,"y":336092},{"x":507,"y":332472},{"x":512,"y":315128},{"x":517,"y":318216},{"x":522,"y":321336},{"x":527,"y":324388},{"x":532,"y":327488},{"x":537,"y":330536},{"x":542,"y":335808},{"x":547,"y":336720},{"x":552,"y":339768},{"x":557,"y":343100},{"x":562,"y":367864},{"x":567,"y":375052},{"x":572,"y":359584},{"x":577,"y":355160},{"x":582,"y":383468},{"x":587,"y":378784},{"x":592,"y":364408},{"x":597,"y":367448},{"x":602,"y":370532},{"x":608,"y":375000},{"x":614,"y":377888},{"x":620,"y":421552},{"x":626,"y":385312},{"x":632,"y":395432},{"x":638,"y":412956},{"x":644,"y":420300},{"x":650,"y":426404},{"x":656,"y":427208},{"x":662,"y":407452},{"x":668,"y":411128},{"x":674,"y":418176},{"x":680,"y":419756},{"x":686,"y":422252},{"x":692,"y":469592},{"x":698,"y":429528},{"x":704,"y":481552},{"x":711,"y":437556},{"x":718,"y":446352},{"x":725,"y":446108},{"x":732,"y":472156},{"x":739,"y":480236},{"x":746,"y":459088},{"x":753,"y":463944},{"x":760,"y":467680},{"x":767,"y":471940},{"x":774,"y":476300},{"x":781,"y":480564},{"x":788,"y":484912},{"x":795,"y":492216},{"x":802,"y":493520},{"x":810,"y":498504},{"x":818,"y":504420},{"x":826,"y":508320},{"x":834,"y":513696},{"x":842,"y":518136},{"x":850,"y":522968},{"x":858,"y":588668},{"x":866,"y":535028},{"x":874,"y":537860},{"x":882,"y":542880},{"x":890,"y":552592},{"x":898,"y":552560},{"x":906,"y":557484},{"x":915,"y":566676},{"x":924,"y":572364},{"x":933,"y":574052},{"x":942,"y":579584},{"x":951,"y":585180},{"x":960,"y":633284},{"x":969,"y":597012},{"x":978,"y":649876},{"x":987,"y":607376},{"x":996,"y":612888},{"x":1005,"y":618356},{"x":1015,"y":624552},{"x":1025,"y":630772},{"x":1035,"y":674648},{"x":1045,"y":659432},{"x":1055,"y":668564},{"x":1065,"y":678612},{"x":1075,"y":661452},{"x":1085,"y":673432},{"x":1095,"y":721456},{"x":1105,"y":723800},{"x":1116,"y":746524},{"x":1127,"y":715704},{"x":1138,"y":700224},{"x":1149,"y":707000},{"x":1160,"y":766808},{"x":1171,"y":720544},{"x":1182,"y":728156},{"x":1193,"y":734164},{"x":1204,"y":759012},{"x":1216,"y":817056},{"x":1228,"y":755640},{"x":1240,"y":762976},{"x":1252,"y":771168},{"x":1264,"y":800660},{"x":1276,"y":892636},{"x":1288,"y":792488},{"x":1300,"y":837528},{"x":1313,"y":864568},{"x":1326,"y":836256},{"x":1339,"y":885632},{"x":1352,"y":848268},{"x":1365,"y":839744},{"x":1378,"y":847828},{"x":1391,"y":892100},{"x":1404,"y":935660},{"x":1418,"y":879324},{"x":1432,"y":909160},{"x":1446,"y":909200},{"x":1460,"y":902056},{"x":1474,"y":907404},{"x":1488,"y":941716},{"x":1502,"y":943800},{"x":1517,"y":982924},{"x":1532,"y":942548},{"x":1547,"y":952708},{"x":1562,"y":1004984},{"x":1577,"y":1017832},{"x":1592,"y":1022028},{"x":1607,"y":989100},{"x":1623,"y":1032148},{"x":1639,"y":1088776},{"x":1655,"y":1018204},{"x":1671,"y":1027988},{"x":1687,"y":1125624},{"x":1703,"y":1120788},{"x":1720,"y":1132584},{"x":1737,"y":1079724},{"x":1754,"y":1113200},{"x":1771,"y":1114488},{"x":1788,"y":1099944},{"x":1805,"y":1110532},{"x":1823,"y":1169176},{"x":1841,"y":1133588},{"x":1859,"y":1143772},{"x":1877,"y":1176384},{"x":1895,"y":1234020},{"x":1913,"y":1183892},{"x":1932,"y":1188508},{"x":1951,"y":1250096},{"x":1970,"y":1278424},{"x":1989,"y":1243620},{"x":2008,"y":1245152},{"x":2028,"y":1247636},{"x":2048,"y":1259872},{"x":2068,"y":1276248},{"x":2088,"y":1308988},{"x":2108,"y":1321396},{"x":2129,"y":1357004},{"x":2150,"y":1342720},{"x":2171,"y":1359192},{"x":2192,"y":1351276},{"x":2213,"y":1362116},{"x":2235,"y":1374900},{"x":2257,"y":1391268},{"x":2279,"y":1402104},{"x":2301,"y":1416716},{"x":2324,"y":1432404},{"x":2347,"y":1492280},{"x":2370,"y":1458688},{"x":2393,"y":1480708},{"x":2416,"y":1532464},{"x":2440,"y":1547928},{"x":2464,"y":1515748},{"x":2488,"y":1551828},{"x":2512,"y":1591760},{"x":2537,"y":1560660},{"x":2562,"y":1578592},{"x":2587,"y":1619920},{"x":2612,"y":1623440},{"x":2638,"y":1662376},{"x":2664,"y":1639768},{"x":2690,"y":1745800},{"x":2716,"y":1720816},{"x":2743,"y":1820736},{"x":2770,"y":1796320},{"x":2797,"y":1810884},{"x":2824,"y":1851668},{"x":2852,"y":1760496},{"x":2880,"y":1849052},{"x":2908,"y":1854280},{"x":2937,"y":1879236},{"x":2966,"y":1923084},{"x":2995,"y":1889892},{"x":3024,"y":1864736},{"x":3054,"y":1928908},{"x":3084,"y":1897152},{"x":3114,"y":2007072},{"x":3145,"y":1978248},{"x":3176,"y":2004008},{"x":3207,"y":2083796},{"x":3239,"y":2083744},{"x":3271,"y":2012928},{"x":3303,"y":2086196},{"x":3336,"y":2095688},{"x":3369,"y":2164356},{"x":3402,"y":2092932},{"x":3436,"y":2166236},{"x":3470,"y":2141304},{"x":3504,"y":2220652},{"x":3539,"y":2194140},{"x":3574,"y":2260880},{"x":3609,"y":2229052},{"x":3645,"y":2249680},{"x":3681,"y":2305456},{"x":3717,"y":2378832},{"x":3754,"y":2398256},{"x":3791,"y":2421020},{"x":3828,"y":2434536},{"x":3866,"y":2466396},{"x":3904,"y":2505284},{"x":3943,"y":2473968},{"x":3982,"y":2502084},{"x":4021,"y":2517276},{"x":4061,"y":2553084},{"x":4101,"y":2523684},{"x":4142,"y":2629296},{"x":4183,"y":2637268},{"x":4224,"y":2692984},{"x":4266,"y":2723556},{"x":4308,"y":2775100},{"x":4351,"y":2702808},{"x":4394,"y":2770908},{"x":4437,"y":2782964},{"x":4481,"y":2760444},{"x":4525,"y":2875388},{"x":4570,"y":2903388},{"x":4615,"y":2854544},{"x":4661,"y":2961484},{"x":4707,"y":3033524},{"x":4754,"y":2969740},{"x":4801,"y":3090596},{"x":4849,"y":3067688},{"x":4897,"y":3012432},{"x":4945,"y":3143368},{"x":4994,"y":3250596},{"x":5043,"y":3172108},{"x":5093,"y":3200608},{"x":5143,"y":3426368},{"x":5194,"y":3294240},{"x":5245,"y":3325092},{"x":5297,"y":3398020},{"x":5349,"y":3351164},{"x":5402,"y":3494800},{"x":5456,"y":3433040},{"x":5510,"y":3449472},{"x":5565,"y":3469796},{"x":5620,"y":3483960},{"x":5676,"y":3558344},{"x":5732,"y":3528888},{"x":5789,"y":3609744},{"x":5846,"y":3685384},{"x":5904,"y":3636420},{"x":5963,"y":3735712},{"x":6022,"y":3851792},{"x":6082,"y":3876720},{"x":6142,"y":3833816},{"x":6203,"y":3898088},{"x":6265,"y":3988720},{"x":6327,"y":4095480},{"x":6390,"y":4076288},{"x":6453,"y":4143248},{"x":6517,"y":4156344},{"x":6582,"y":4216284},{"x":6647,"y":4333668},{"x":6713,"y":4230800},{"x":6780,"y":4439512},{"x":6847,"y":4341840},{"x":6915,"y":4473592},{"x":6984,"y":4444368},{"x":7053,"y":4524064},{"x":7123,"y":4475240},{"x":7194,"y":4463008},{"x":7265,"y":4617544},{"x":7337,"y":4675284},{"x":7410,"y":4791160},{"x":7484,"y":4847420},{"x":7558,"y":4780424},{"x":7633,"y":4841296},{"x":7709,"y":4810496}],"kde":[1008,852,880,816,832,816,908,820,820,816,872,808,816,844,920,816,812,824,880,844,808,808,824,868,816,804,808,884,892,812,808,876,868,832,816,888,856,848,816,828,904,816,820,832,804,820,824,824,876,844,808,816,824,820,804,816,812,816,808,812,860,852,824,808,824,824,804,808,808,856,808,804,804,816,844,804,808,840,812,808,808,852,840,808,812,816,816,840,808,812,880,808,808,808,816,812,836,816,808,808,816,848,860,828,816,820,816,840,816,804,832,808,816,808,816,1012,816,808,816,840,816,816,816,876,840,816,808,812,812,816,808,804,860,844,808,808,820,832,808,844,816,812,816,808,860,812,808,812,812,856,808,808,828,844,812,812,840,812,808,812,820,812,812,808,808,836,808,812,808,816,816,836,820,820,1044,864,812,816,820,824,820,824,876,816,812,816,824,808,812,812,808,824,816,820,812,828,848,816,812,816,816,844,820,812,816,836,816,808,808,812,852,808,808,808,808,812,860,860,828,812,820,840,808,804,17068,780,780,776,784,776,784,780,784,812,780,780,784,840,788,780,788,856,784,784,780,780,776,776,784,804,784,780,784,788,788,780,808,780,800,784,780,816,828,812,776,776,816,780,780,784,784,776,784,788,788,812,772,780,788,784,824,784,780,824,780,804,780,784,776,776,784,780,784,784,808,804,864,776,780,788,780,776,780,776,840,788,780,776,792,780,804,780,780,780,788,800,832,816,788,780,796,796,780,784,784,1040,784,776,784,792,784,784,784,792,788,804,780,824,800,788,808,792,796,780,788,784,788,788,788,812,784,788,784,780,808,784,788,784,828,780,812,784,804,792,788,804,784,824,788,784,800,784,784,784,784,784,780,788,784,844,772,788,780,788,792,784,788,776,860,792,780,788,792,820,784,784,792,784,776,792,832,784,784,788,784,796,784,784,784,816,784,780,784,792,788,816,784,820,792,784,784,784,780,780,780,804,792,784,780,788,816,784,784,780,784,812,780,780,796,800,17900,828,824,808,812,816,816,840,820,844,820,832,828,812,840,824,816,856,808,820,836,828,852,816,820,820,820,808,824,812,808,840,844,824,820,820,856,824,812,824,852,832,840,816,816,812,812,820,816,832,812,816,812,832,816,808,820,840,844,808,808,812,812,844,816,812,816,808,804,812,824,812,804,816,820,824,820,816,880,820,812,808,824,840,816,816,812,816,840,824,820,824,840,872,828,816,860,828,816,856,816,840,820,820,820,816,820,824,808,812,820,828,896,812,844,824,828,816,820,836,880,824,856,856,908,816,844,812,820,856,832,816,940,820,840,816,824,828,836,816,812,816,820,840,816,820,844,816,824,816,816,812,812,856,820,848,808,820,828,816,816,816,852,820,844,816,812,856,816,848,808,816,820,820,848,816,812,816,848,816,816,812,816,1172,820,812,808,808,820,884,816,812,808,844,816,864,824,812,820,812,852,852,820,820,880,820,812,812,820,812,808,820,820,820,816,824,868,816,816,820,816,820,812,816,812,840,840,808,816,828,816,836,824,812,812,808,840,816,808,812,884,824,820,812,824,880,840,824,816,820,820,824,808,848,812,816,884,824,816,812,816,840,820,848,820,816,816,840,816,816,816,816,844,816,844,816,808,808,816,812,812,812,832,816,836,816,808,816,844,816,884,816,816,844,824,844,848,820,820,820,840,816,816,808,812,832,816,820,816,812,816,816,816,868,868,820,808,816,816,836,840,824,816,820,848,824,828,816,816,808,828,820,824,816,844,844,824,820,816,820,812,812,816,816,848,816,816,820,808,816,884,820,856,836,828,860,852,828,816,816,812,808,808,808,820,828,808,812,868,840,824,828,816,820,840,812,820,824,816,832,824,808,808,816,812,816,820,816,880,812,812,816,824,824,816,812,820,968,864,832,812,816,812,844,816,812,812,816,812,848,844,816,812,828,836,844,816,852,860,816,816,820,840,812,816,812,816,840,812,812,852,824,816,820,824,844,816,816,812,868,840,816,816,816,844,812,816,872,820,808,816,860,844,812,808,816,824,800,812,816,872,824,1096,788,788,804,784,788,788,804,808,784,836,788,864,832,788,784,784,804,788,820,780,776,804,792,784,784,784,788,792,776,784,808,788,776,784,796,796,784,784,784,812,788,784,784,808,872,780,788,788,808,808,788,812,780,812,784,784,796,780,812,780,792,812,820,800,796,788,816,788,792,780,816,784,788,780,804,792,776,800,788,812,820,784,784,788,784,800,788,788,784,820,816,784,780,772,784,780,792],"result":{"estimate":633.2188771702585,"r_square":0.9994970639429573}},{"name":"hash A 50","description":{"start":1,"sampling":1.01,"stabilize":true,"quota":500000000,"limit":2000,"instances":["minor-allocated","major-allocated","monotonic-clock"],"samples":584,"time":501680091},"dataset":[{"x":1,"y":1176},{"x":2,"y":1576},{"x":3,"y":2204},{"x":4,"y":2876},{"x":5,"y":3548},{"x":6,"y":4216},{"x":7,"y":4900},{"x":8,"y":5576},{"x":9,"y":6264},{"x":10,"y":6920},{"x":11,"y":7600},{"x":12,"y":8272},{"x":13,"y":9052},{"x":14,"y":9644},{"x":15,"y":10380},{"x":16,"y":11060},{"x":17,"y":11728},{"x":18,"y":12428},{"x":19,"y":13076},{"x":20,"y":13748},{"x":21,"y":14424},{"x":22,"y":15092},{"x":23,"y":15776},{"x":24,"y":16444},{"x":25,"y":17120},{"x":26,"y":17800},{"x":27,"y":18472},{"x":28,"y":19152},{"x":29,"y":19820},{"x":30,"y":20500},{"x":31,"y":21172},{"x":32,"y":21848},{"x":33,"y":22544},{"x":34,"y":23204},{"x":35,"y":24024},{"x":36,"y":24540},{"x":37,"y":25252},{"x":38,"y":25940},{"x":39,"y":26576},{"x":40,"y":27272},{"x":41,"y":31324},{"x":42,"y":32772},{"x":43,"y":29272},{"x":44,"y":29944},{"x":45,"y":30648},{"x":46,"y":31280},{"x":47,"y":31972},{"x":48,"y":32668},{"x":49,"y":33300},{"x":50,"y":33984},{"x":51,"y":34656},{"x":52,"y":35480},{"x":53,"y":36008},{"x":54,"y":36712},{"x":55,"y":37368},{"x":56,"y":38032},{"x":57,"y":38732},{"x":58,"y":39384},{"x":59,"y":40052},{"x":60,"y":40728},{"x":61,"y":41404},{"x":62,"y":42080},{"x":63,"y":42752},{"x":64,"y":43428},{"x":65,"y":44104},{"x":66,"y":44796},{"x":67,"y":45460},{"x":68,"y":46116},{"x":69,"y":46824},{"x":70,"y":47468},{"x":71,"y":48160},{"x":72,"y":48860},{"x":73,"y":49504},{"x":74,"y":50196},{"x":75,"y":50840},{"x":76,"y":51520},{"x":77,"y":52200},{"x":78,"y":52868},{"x":79,"y":53572},{"x":80,"y":54224},{"x":81,"y":54892},{"x":82,"y":55576},{"x":83,"y":56252},{"x":84,"y":56936},{"x":85,"y":57592},{"x":86,"y":58296},{"x":87,"y":58936},{"x":88,"y":59624},{"x":89,"y":60924},{"x":90,"y":66640},{"x":91,"y":61636},{"x":92,"y":80708},{"x":93,"y":65512},{"x":94,"y":66260},{"x":95,"y":66928},{"x":96,"y":67764},{"x":97,"y":82916},{"x":98,"y":66384},{"x":99,"y":67100},{"x":100,"y":67784},{"x":101,"y":95324},{"x":102,"y":71840},{"x":103,"y":72824},{"x":104,"y":73232},{"x":105,"y":74172},{"x":106,"y":89208},{"x":107,"y":72544},{"x":108,"y":73344},{"x":109,"y":73928},{"x":110,"y":74512},{"x":111,"y":75184},{"x":112,"y":75824},{"x":113,"y":76476},{"x":114,"y":77160},{"x":115,"y":77832},{"x":116,"y":78492},{"x":117,"y":79208},{"x":118,"y":80356},{"x":119,"y":99392},{"x":120,"y":84456},{"x":121,"y":85156},{"x":122,"y":85852},{"x":123,"y":100808},{"x":124,"y":83912},{"x":125,"y":84604},{"x":126,"y":85252},{"x":127,"y":85956},{"x":128,"y":86600},{"x":129,"y":87308},{"x":130,"y":87968},{"x":131,"y":88628},{"x":132,"y":89340},{"x":133,"y":89972},{"x":134,"y":90672},{"x":135,"y":91328},{"x":136,"y":92020},{"x":137,"y":92652},{"x":138,"y":93376},{"x":139,"y":94024},{"x":140,"y":94732},{"x":141,"y":95376},{"x":142,"y":96048},{"x":143,"y":96744},{"x":144,"y":97400},{"x":145,"y":98092},{"x":146,"y":98748},{"x":147,"y":102904},{"x":148,"y":121884},{"x":149,"y":104924},{"x":150,"y":120220},{"x":151,"y":102176},{"x":152,"y":102920},{"x":153,"y":103560},{"x":154,"y":104140},{"x":155,"y":104848},{"x":156,"y":105492},{"x":157,"y":106156},{"x":158,"y":106856},{"x":159,"y":107524},{"x":160,"y":108172},{"x":161,"y":108888},{"x":162,"y":109552},{"x":163,"y":110220},{"x":164,"y":110900},{"x":165,"y":111560},{"x":166,"y":112264},{"x":167,"y":112932},{"x":168,"y":113584},{"x":169,"y":114280},{"x":170,"y":116024},{"x":171,"y":115580},{"x":172,"y":116288},{"x":173,"y":117056},{"x":174,"y":117848},{"x":175,"y":118308},{"x":176,"y":118992},{"x":177,"y":119680},{"x":178,"y":120356},{"x":179,"y":121224},{"x":180,"y":121708},{"x":181,"y":122392},{"x":182,"y":123052},{"x":183,"y":156864},{"x":184,"y":129356},{"x":185,"y":142900},{"x":186,"y":125776},{"x":187,"y":126408},{"x":188,"y":134704},{"x":189,"y":127768},{"x":190,"y":128424},{"x":191,"y":129132},{"x":192,"y":129792},{"x":193,"y":130476},{"x":194,"y":131120},{"x":195,"y":131804},{"x":196,"y":132516},{"x":197,"y":133160},{"x":198,"y":133816},{"x":199,"y":155864},{"x":200,"y":140620},{"x":202,"y":142012},{"x":204,"y":143344},{"x":206,"y":159376},{"x":208,"y":140580},{"x":210,"y":141956},{"x":212,"y":143312},{"x":214,"y":144652},{"x":216,"y":145984},{"x":218,"y":148488},{"x":220,"y":148660},{"x":222,"y":153640},{"x":224,"y":174808},{"x":226,"y":173268},{"x":228,"y":154088},{"x":230,"y":155432},{"x":232,"y":156752},{"x":234,"y":158120},{"x":236,"y":159476},{"x":238,"y":160840},{"x":240,"y":162180},{"x":242,"y":163532},{"x":244,"y":164872},{"x":246,"y":166228},{"x":248,"y":167548},{"x":250,"y":168896},{"x":252,"y":170272},{"x":254,"y":171624},{"x":256,"y":172964},{"x":258,"y":174308},{"x":260,"y":175672},{"x":262,"y":177008},{"x":264,"y":178340},{"x":266,"y":179696},{"x":268,"y":181068},{"x":270,"y":210024},{"x":272,"y":191140},{"x":274,"y":201824},{"x":276,"y":186484},{"x":278,"y":188852},{"x":280,"y":189172},{"x":282,"y":190504},{"x":284,"y":191976},{"x":286,"y":193212},{"x":288,"y":194572},{"x":290,"y":196092},{"x":292,"y":197248},{"x":294,"y":198612},{"x":296,"y":199976},{"x":298,"y":201324},{"x":300,"y":202656},{"x":303,"y":204728},{"x":306,"y":206676},{"x":309,"y":208716},{"x":312,"y":210784},{"x":315,"y":235664},{"x":318,"y":239072},{"x":321,"y":216820},{"x":324,"y":218848},{"x":327,"y":222812},{"x":330,"y":225644},{"x":333,"y":225116},{"x":336,"y":237200},{"x":339,"y":229000},{"x":342,"y":231920},{"x":345,"y":233020},{"x":348,"y":235036},{"x":351,"y":237088},{"x":354,"y":239120},{"x":357,"y":263596},{"x":360,"y":263260},{"x":363,"y":245168},{"x":366,"y":277076},{"x":369,"y":290464},{"x":372,"y":274888},{"x":375,"y":253264},{"x":378,"y":255288},{"x":381,"y":259848},{"x":384,"y":259368},{"x":387,"y":261360},{"x":390,"y":263448},{"x":393,"y":269336},{"x":396,"y":294584},{"x":399,"y":291092},{"x":402,"y":272456},{"x":406,"y":274156},{"x":410,"y":294696},{"x":414,"y":294116},{"x":418,"y":304628},{"x":422,"y":284996},{"x":426,"y":287680},{"x":430,"y":299232},{"x":434,"y":293096},{"x":438,"y":295772},{"x":442,"y":298408},{"x":446,"y":301156},{"x":450,"y":303864},{"x":454,"y":306520},{"x":458,"y":309244},{"x":462,"y":312392},{"x":466,"y":346432},{"x":470,"y":345384},{"x":474,"y":320980},{"x":478,"y":322756},{"x":482,"y":325440},{"x":486,"y":328156},{"x":490,"y":330824},{"x":494,"y":339196},{"x":498,"y":336248},{"x":502,"y":338928},{"x":507,"y":342300},{"x":512,"y":345736},{"x":517,"y":352600},{"x":522,"y":352408},{"x":527,"y":355772},{"x":532,"y":359108},{"x":537,"y":362544},{"x":542,"y":367000},{"x":547,"y":369344},{"x":552,"y":372688},{"x":557,"y":376276},{"x":562,"y":379404},{"x":567,"y":382792},{"x":572,"y":432484},{"x":577,"y":389544},{"x":582,"y":392936},{"x":587,"y":396276},{"x":592,"y":399664},{"x":597,"y":403060},{"x":602,"y":406416},{"x":608,"y":411712},{"x":614,"y":414508},{"x":620,"y":418548},{"x":626,"y":425936},{"x":632,"y":426628},{"x":638,"y":430696},{"x":644,"y":434744},{"x":650,"y":438816},{"x":656,"y":442840},{"x":662,"y":446944},{"x":668,"y":450948},{"x":674,"y":454984},{"x":680,"y":467928},{"x":686,"y":486824},{"x":692,"y":488804},{"x":698,"y":471204},{"x":704,"y":475220},{"x":711,"y":479940},{"x":718,"y":484624},{"x":725,"y":489416},{"x":732,"y":497352},{"x":739,"y":499044},{"x":746,"y":511736},{"x":753,"y":508816},{"x":760,"y":512980},{"x":767,"y":517732},{"x":774,"y":522460},{"x":781,"y":527168},{"x":788,"y":539832},{"x":795,"y":582256},{"x":802,"y":541356},{"x":810,"y":546656},{"x":818,"y":553296},{"x":826,"y":564068},{"x":834,"y":563352},{"x":842,"y":574352},{"x":850,"y":573748},{"x":858,"y":623352},{"x":866,"y":584508},{"x":874,"y":589928},{"x":882,"y":595476},{"x":890,"y":601520},{"x":898,"y":613768},{"x":906,"y":611512},{"x":915,"y":617560},{"x":924,"y":623676},{"x":933,"y":629732},{"x":942,"y":635760},{"x":951,"y":645200},{"x":960,"y":647936},{"x":969,"y":654724},{"x":978,"y":668304},{"x":987,"y":666160},{"x":996,"y":672236},{"x":1005,"y":681416},{"x":1015,"y":685048},{"x":1025,"y":691924},{"x":1035,"y":699148},{"x":1045,"y":705276},{"x":1055,"y":711944},{"x":1065,"y":722028},{"x":1075,"y":725520},{"x":1085,"y":732280},{"x":1095,"y":738980},{"x":1105,"y":746724},{"x":1116,"y":756228},{"x":1127,"y":761100},{"x":1138,"y":768040},{"x":1149,"y":775432},{"x":1160,"y":782912},{"x":1171,"y":793020},{"x":1182,"y":798400},{"x":1193,"y":805100},{"x":1204,"y":855080},{"x":1216,"y":820632},{"x":1228,"y":874272},{"x":1240,"y":836832},{"x":1252,"y":845924},{"x":1264,"y":853124},{"x":1276,"y":861180},{"x":1288,"y":871980},{"x":1300,"y":899576},{"x":1313,"y":940464},{"x":1326,"y":895332},{"x":1339,"y":906416},{"x":1352,"y":912468},{"x":1365,"y":921232},{"x":1378,"y":930024},{"x":1391,"y":938772},{"x":1404,"y":951568},{"x":1418,"y":956916},{"x":1432,"y":966356},{"x":1446,"y":975712},{"x":1460,"y":992508},{"x":1474,"y":999228},{"x":1488,"y":1004184},{"x":1502,"y":1019392},{"x":1517,"y":1128532},{"x":1532,"y":1053940},{"x":1547,"y":1045196},{"x":1562,"y":1057756},{"x":1577,"y":1107024},{"x":1592,"y":1074376},{"x":1607,"y":1084888},{"x":1623,"y":1098948},{"x":1639,"y":1105992},{"x":1655,"y":1116776},{"x":1671,"y":1127648},{"x":1687,"y":1148232},{"x":1703,"y":1193284},{"x":1720,"y":1160880},{"x":1737,"y":1175152},{"x":1754,"y":1183640},{"x":1771,"y":1196320},{"x":1788,"y":1206556},{"x":1805,"y":1220784},{"x":1823,"y":1230120},{"x":1841,"y":1285952},{"x":1859,"y":1299696},{"x":1877,"y":1266664},{"x":1895,"y":1321344},{"x":1913,"y":1297192},{"x":1932,"y":1352296},{"x":1951,"y":1316556},{"x":1970,"y":1375392},{"x":1989,"y":1343224},{"x":2008,"y":1355680},{"x":2028,"y":1377360},{"x":2048,"y":1382052},{"x":2068,"y":1396624},{"x":2088,"y":1411960},{"x":2108,"y":1494916},{"x":2129,"y":1472008},{"x":2150,"y":1452144},{"x":2171,"y":1464984},{"x":2192,"y":1482280},{"x":2213,"y":1525440},{"x":2235,"y":1534120},{"x":2257,"y":1531136},{"x":2279,"y":1537848},{"x":2301,"y":1614608},{"x":2324,"y":1568236},{"x":2347,"y":1583760},{"x":2370,"y":1606544},{"x":2393,"y":1685560},{"x":2416,"y":1657612},{"x":2440,"y":1653040},{"x":2464,"y":1670144},{"x":2488,"y":1685440},{"x":2512,"y":1753824},{"x":2537,"y":1714920},{"x":2562,"y":1728808},{"x":2587,"y":1749300},{"x":2612,"y":1780092},{"x":2638,"y":1831404},{"x":2664,"y":1801112},{"x":2690,"y":1815124},{"x":2716,"y":1841368},{"x":2743,"y":1852416},{"x":2770,"y":1931008},{"x":2797,"y":1930332},{"x":2824,"y":1952952},{"x":2852,"y":1924544},{"x":2880,"y":2001732},{"x":2908,"y":1963616},{"x":2937,"y":1998424},{"x":2966,"y":2002668},{"x":2995,"y":2085204},{"x":3024,"y":2083808},{"x":3054,"y":2068636},{"x":3084,"y":2089276},{"x":3114,"y":2105796},{"x":3145,"y":2122012},{"x":3176,"y":2199308},{"x":3207,"y":2165252},{"x":3239,"y":2255328},{"x":3271,"y":2327364},{"x":3303,"y":2299324},{"x":3336,"y":2274872},{"x":3369,"y":2292244},{"x":3402,"y":2366928},{"x":3436,"y":2370004},{"x":3470,"y":2341416},{"x":3504,"y":2465128},{"x":3539,"y":2387860},{"x":3574,"y":2416136},{"x":3609,"y":2442780},{"x":3645,"y":2460640},{"x":3681,"y":2496120},{"x":3717,"y":2572480},{"x":3754,"y":2585352},{"x":3791,"y":2611544},{"x":3828,"y":2587748},{"x":3866,"y":2621620},{"x":3904,"y":2741976},{"x":3943,"y":2661772},{"x":3982,"y":2702688},{"x":4021,"y":2871780},{"x":4061,"y":2807576},{"x":4101,"y":2836960},{"x":4142,"y":2822404},{"x":4183,"y":2891788},{"x":4224,"y":2856900},{"x":4266,"y":2930416},{"x":4308,"y":3022444},{"x":4351,"y":2963480},{"x":4394,"y":3074572},{"x":4437,"y":3049124},{"x":4481,"y":3152880},{"x":4525,"y":3115604},{"x":4570,"y":3084948},{"x":4615,"y":3161904},{"x":4661,"y":3152696},{"x":4707,"y":3274484},{"x":4754,"y":3283964},{"x":4801,"y":3336076},{"x":4849,"y":3338012},{"x":4897,"y":3335244},{"x":4945,"y":3384628},{"x":4994,"y":3378076},{"x":5043,"y":3405832},{"x":5093,"y":3451180},{"x":5143,"y":3520760},{"x":5194,"y":3551912},{"x":5245,"y":3633960},{"x":5297,"y":3702844},{"x":5349,"y":3620576},{"x":5402,"y":3655740},{"x":5456,"y":3696152},{"x":5510,"y":3770728},{"x":5565,"y":3785468},{"x":5620,"y":3849388},{"x":5676,"y":3836860},{"x":5732,"y":3899632},{"x":5789,"y":3975808},{"x":5846,"y":4009568},{"x":5904,"y":4083100},{"x":5963,"y":4120168},{"x":6022,"y":4110664},{"x":6082,"y":4158972},{"x":6142,"y":4152640},{"x":6203,"y":4326764},{"x":6265,"y":4276000},{"x":6327,"y":4483636},{"x":6390,"y":4367184},{"x":6453,"y":4453544},{"x":6517,"y":4463884},{"x":6582,"y":4477972},{"x":6647,"y":4510540},{"x":6713,"y":4584796},{"x":6780,"y":4585724},{"x":6847,"y":4624736},{"x":6915,"y":4674120},{"x":6984,"y":4716408},{"x":7053,"y":4770896}],"kde":[1092,880,912,864,844,844,876,868,844,844,840,864,880,844,844,892,856,888,844,884,852,840,844,852,856,848,848,856,856,840,848,836,872,852,844,836,848,872,844,840,840,844,844,836,844,848,844,840,844,848,844,840,844,848,840,836,836,848,844,848,848,868,840,840,848,844,872,844,840,844,852,868,840,844,848,848,868,844,880,848,872,848,844,840,840,848,848,848,840,848,900,864,840,844,840,856,840,844,840,852,836,844,848,836,848,840,848,848,844,844,844,872,852,840,848,844,880,840,844,840,848,848,844,840,872,836,840,844,836,836,844,844,836,852,836,872,840,852,856,836,860,840,844,864,848,872,844,844,840,840,868,844,876,860,856,872,844,844,860,852,868,844,864,844,856,876,844,836,844,848,844,832,844,880,848,856,844,844,844,844,844,860,836,1060,852,844,844,848,868,880,840,848,836,848,884,868,848,848,848,856,852,944,872,840,856,876,844,844,848,844,864,840,844,836,840,836,848,856,868,840,856,844,844,836,840,860,844,832,840,856,836,844,840,836,864,832,844,852,844,860,840,856,848,848,876,840,848,836,840,900,852,840,868,872,848,840,848,840,848,840,848,844,856,852,844,840,844,868,840,840,840,848,840,848,840,848,844,840,848,840,840,872,844,856,852,844,876,836,848,852,844,868,848,848,848,848,872,840,844,844,844,844,840,844,840,860,840,840,864,848,848,840,848,848,844,848,876,844,848,844,848,872,840,848,840,844,880,840,836,848,852,868,844,848,856,840,836,848,840,844,844,900,844,848,844,844,848,836,840,840,836,860,844,844,844,852,844,852,836,844,836,844,848,844,840,848,836,856,856,836,836,848,856,848,840,836,848,844,852,844,840,848,840,844,844,840,840,876,840,860,840,836,860,860,844,840,848,868,844,840,844,848,852,840,844,840,844,840,852,872,852,848,840,840,836,880,840,844,852,844,868,848,844,840,844,840,876,844,844,856,868,860,836,844,868,864,872,848,844,848,848,872,844,848,844,844,872,844,840,836,848,856,848,848,844,880,856,884,852,844,864,848,836,848,840,840,852,840,860,844,840,872,848,852,840,836,856,860,844,864,868,844,848,844,848,844,848,840,844,840,836,844,848,848,848,844,844,852,856,880,848,840,860,844,832,848,852,840,852,872,856,844,836,840,844,844,840,852,860,876,848,840,840,860,848,844,840,848,848,852,840,836,840,848,844,844,856,844,864,852,856,840,844,864,852,852,832,844,840,912,844,836,844,848,840,844,844,840,840,836,840,856,864,848,848,856,848,844,840,872,844,848,844,840,832,832,852,848,848,844,840,864,844,844,844,840,884,840,848,844,852,844,876,844,848,836,840,868,844,848,836,844,876,864,844,840,848,856,836,844,848,844,844,848,860,848,844,840,840,872,836,840,844,852,860,864,860,848,864,864,840,840,844,840,868,836,872,848,840,836,836,844,844,844,836,860,848,844,840,836,844,844,856,852,872,844,840,844,856,848,872,844,848,844,848,844,856,844,836,844,888,840,848,844,876,876,848,840,848,840,840,844,840,840,844,844,856,848,840,840,840,856,848,872,836,868,840,844,868,844,844,840,844,868,840,848,844,856,844,844,840,852,852,848,844,836,872,848,840,840,880,844,840,840,864,836,840,856,880,864,840,844,852,880,844,852,848,892,848,844,840,848,836,844,844,848,848,840,844,848,844,840,844,872,848,836,844,840,860,840,840,872,856,840,844,840,876,840,840,844,840,852,868,844,856,848,840,864,840,864,840,836,864,852,868,856,840,872,844,844,844,844,844,832,836,852,848,864,844,832,852,848,836,868,852,868,848,840,836,836,860,840,840,840,836,840,840,840,840,840,836,852,844,836,840,844,844,844,840,840,836,836,848,840,848,840,868,840,852,836,844,840,852,872,836,840,844,840,860,840,840,840,836,844,840,844,840,832,852,852,840,840,864,844,836,840,840,864,840,848,836,900,840,844,840,844,836,840,840,844,848,836,840,832,836,836,836,836,872,872,848,848,844,836,840,836,836,836,836,840,844,872,840,836,836,864,840,836,836,848,844,848,844,848,852,836,844,844,848,840,872,868,864,844,836,832,860,868,844,840,872,840,868,844,844,840,848,840,848,844,852,844,848,848,844,848,848,864,840,864,840,856,852,848,844,836,868,848,848,840,864,872,852,860,840,836,840,852,860,848,840,840,860,904,844,840,844,872,876,848,840,844,840,844,844,844,840,836,856,852,860,844,844,892,852,844,844,856,868,844],"result":{"estimate":684.1469561475677,"r_square":0.9996945002929193}},{"name":"hash A 100","description":{"start":1,"sampling":1.01,"stabilize":true,"quota":500000000,"limit":2000,"instances":["minor-allocated","major-allocated","monotonic-clock"],"samples":513,"time":504560890},"dataset":[{"x":1,"y":1856},{"x":2,"y":2872},{"x":3,"y":4228},{"x":4,"y":5540},{"x":5,"y":6840},{"x":6,"y":8248},{"x":7,"y":9544},{"x":8,"y":10896},{"x":9,"y":12232},{"x":10,"y":13560},{"x":11,"y":14920},{"x":12,"y":16220},{"x":13,"y":17552},{"x":14,"y":18884},{"x":15,"y":20208},{"x":16,"y":21536},{"x":17,"y":22924},{"x":18,"y":24200},{"x":19,"y":25532},{"x":20,"y":26856},{"x":21,"y":28216},{"x":22,"y":29520},{"x":23,"y":30852},{"x":24,"y":32192},{"x":25,"y":33528},{"x":26,"y":34848},{"x":27,"y":36200},{"x":28,"y":37496},{"x":29,"y":38828},{"x":30,"y":40184},{"x":31,"y":41496},{"x":32,"y":56084},{"x":33,"y":62384},{"x":34,"y":47300},{"x":35,"y":48976},{"x":36,"y":50092},{"x":37,"y":51448},{"x":38,"y":81004},{"x":39,"y":52124},{"x":40,"y":53456},{"x":41,"y":54836},{"x":42,"y":75284},{"x":43,"y":59768},{"x":44,"y":61168},{"x":45,"y":68728},{"x":46,"y":63892},{"x":47,"y":79568},{"x":48,"y":64084},{"x":49,"y":65420},{"x":50,"y":66756},{"x":51,"y":68120},{"x":52,"y":69672},{"x":53,"y":70760},{"x":54,"y":72064},{"x":55,"y":73420},{"x":56,"y":74724},{"x":57,"y":76052},{"x":58,"y":77416},{"x":59,"y":78716},{"x":60,"y":80072},{"x":61,"y":81364},{"x":62,"y":82728},{"x":63,"y":84016},{"x":64,"y":85396},{"x":65,"y":86716},{"x":66,"y":88024},{"x":67,"y":89380},{"x":68,"y":90672},{"x":69,"y":92008},{"x":70,"y":93372},{"x":71,"y":94676},{"x":72,"y":96032},{"x":73,"y":97352},{"x":74,"y":98656},{"x":75,"y":100000},{"x":76,"y":101316},{"x":77,"y":102644},{"x":78,"y":104016},{"x":79,"y":105304},{"x":80,"y":106656},{"x":81,"y":108000},{"x":82,"y":109292},{"x":83,"y":110628},{"x":84,"y":111976},{"x":85,"y":113276},{"x":86,"y":122444},{"x":87,"y":116164},{"x":88,"y":117296},{"x":89,"y":119128},{"x":90,"y":120072},{"x":91,"y":121344},{"x":92,"y":122960},{"x":93,"y":124128},{"x":94,"y":147332},{"x":95,"y":131688},{"x":96,"y":152240},{"x":97,"y":129284},{"x":98,"y":130576},{"x":99,"y":131928},{"x":100,"y":133276},{"x":101,"y":134588},{"x":102,"y":135916},{"x":103,"y":137216},{"x":104,"y":138568},{"x":105,"y":139904},{"x":106,"y":141248},{"x":107,"y":142572},{"x":108,"y":143868},{"x":109,"y":145368},{"x":110,"y":146560},{"x":111,"y":147888},{"x":112,"y":149212},{"x":113,"y":150536},{"x":114,"y":151880},{"x":115,"y":183284},{"x":116,"y":160768},{"x":117,"y":173764},{"x":118,"y":157528},{"x":119,"y":158852},{"x":120,"y":159852},{"x":121,"y":161172},{"x":122,"y":162528},{"x":123,"y":164076},{"x":124,"y":165664},{"x":125,"y":167272},{"x":126,"y":167952},{"x":127,"y":169124},{"x":128,"y":170500},{"x":129,"y":171860},{"x":130,"y":173136},{"x":131,"y":174476},{"x":132,"y":180812},{"x":133,"y":180496},{"x":134,"y":178540},{"x":135,"y":180036},{"x":136,"y":181172},{"x":137,"y":182740},{"x":138,"y":187032},{"x":139,"y":185172},{"x":140,"y":186512},{"x":141,"y":188040},{"x":142,"y":189844},{"x":143,"y":213808},{"x":144,"y":211484},{"x":145,"y":193104},{"x":146,"y":194656},{"x":147,"y":195940},{"x":148,"y":197048},{"x":149,"y":198416},{"x":150,"y":199764},{"x":151,"y":201068},{"x":152,"y":202408},{"x":153,"y":203740},{"x":154,"y":205120},{"x":155,"y":206400},{"x":156,"y":207872},{"x":157,"y":209068},{"x":158,"y":238484},{"x":159,"y":230836},{"x":160,"y":239624},{"x":161,"y":222952},{"x":162,"y":232412},{"x":163,"y":217052},{"x":164,"y":218352},{"x":165,"y":219752},{"x":166,"y":221032},{"x":167,"y":222368},{"x":168,"y":241140},{"x":169,"y":250296},{"x":170,"y":227936},{"x":171,"y":227676},{"x":172,"y":249576},{"x":173,"y":252476},{"x":174,"y":231936},{"x":175,"y":236552},{"x":176,"y":234356},{"x":177,"y":235652},{"x":178,"y":237012},{"x":179,"y":238868},{"x":180,"y":239992},{"x":181,"y":241064},{"x":182,"y":242296},{"x":183,"y":243628},{"x":184,"y":253248},{"x":185,"y":246288},{"x":186,"y":247636},{"x":187,"y":250544},{"x":188,"y":251908},{"x":189,"y":251604},{"x":190,"y":252948},{"x":191,"y":254260},{"x":192,"y":264324},{"x":193,"y":256936},{"x":194,"y":258264},{"x":195,"y":259636},{"x":196,"y":260924},{"x":197,"y":281128},{"x":198,"y":287596},{"x":199,"y":264928},{"x":200,"y":268604},{"x":202,"y":268888},{"x":204,"y":271544},{"x":206,"y":274200},{"x":208,"y":276904},{"x":210,"y":279524},{"x":212,"y":282224},{"x":214,"y":290736},{"x":216,"y":287516},{"x":218,"y":291484},{"x":220,"y":292816},{"x":222,"y":295492},{"x":224,"y":298164},{"x":226,"y":300824},{"x":228,"y":303504},{"x":230,"y":306112},{"x":232,"y":308808},{"x":234,"y":311472},{"x":236,"y":314116},{"x":238,"y":316780},{"x":240,"y":327164},{"x":242,"y":322084},{"x":244,"y":324776},{"x":246,"y":327440},{"x":248,"y":330100},{"x":250,"y":332732},{"x":252,"y":335420},{"x":254,"y":338020},{"x":256,"y":340736},{"x":258,"y":343360},{"x":260,"y":346040},{"x":262,"y":377992},{"x":264,"y":406036},{"x":266,"y":358740},{"x":268,"y":356692},{"x":270,"y":359348},{"x":272,"y":361988},{"x":274,"y":364680},{"x":276,"y":367316},{"x":278,"y":371224},{"x":280,"y":372616},{"x":282,"y":375300},{"x":284,"y":386344},{"x":286,"y":380612},{"x":288,"y":383336},{"x":290,"y":386300},{"x":292,"y":416728},{"x":294,"y":407960},{"x":296,"y":393920},{"x":298,"y":415512},{"x":300,"y":422984},{"x":303,"y":421180},{"x":306,"y":435188},{"x":309,"y":411240},{"x":312,"y":415220},{"x":315,"y":419196},{"x":318,"y":423204},{"x":321,"y":469772},{"x":324,"y":431140},{"x":327,"y":435144},{"x":330,"y":439152},{"x":333,"y":454464},{"x":336,"y":518164},{"x":339,"y":478044},{"x":342,"y":456272},{"x":345,"y":459072},{"x":348,"y":469536},{"x":351,"y":467148},{"x":354,"y":515256},{"x":357,"y":520156},{"x":360,"y":525432},{"x":363,"y":518000},{"x":366,"y":508392},{"x":369,"y":491016},{"x":372,"y":496000},{"x":375,"y":499024},{"x":378,"y":512628},{"x":381,"y":506944},{"x":384,"y":565132},{"x":387,"y":562132},{"x":390,"y":561424},{"x":393,"y":543112},{"x":396,"y":551820},{"x":399,"y":531056},{"x":402,"y":536972},{"x":406,"y":577884},{"x":410,"y":575072},{"x":414,"y":554092},{"x":418,"y":556168},{"x":422,"y":616872},{"x":426,"y":615468},{"x":430,"y":600520},{"x":434,"y":635516},{"x":438,"y":586632},{"x":442,"y":588120},{"x":446,"y":593396},{"x":450,"y":598800},{"x":454,"y":612532},{"x":458,"y":637400},{"x":462,"y":639880},{"x":466,"y":620012},{"x":470,"y":625320},{"x":474,"y":632788},{"x":478,"y":635972},{"x":482,"y":641284},{"x":486,"y":701604},{"x":490,"y":654740},{"x":494,"y":658284},{"x":498,"y":663760},{"x":502,"y":686056},{"x":507,"y":724048},{"x":512,"y":752120},{"x":517,"y":738136},{"x":522,"y":695424},{"x":527,"y":701104},{"x":532,"y":707840},{"x":537,"y":765984},{"x":542,"y":731508},{"x":547,"y":727872},{"x":552,"y":734380},{"x":557,"y":741528},{"x":562,"y":836432},{"x":567,"y":774504},{"x":572,"y":760936},{"x":577,"y":767608},{"x":582,"y":774244},{"x":587,"y":820112},{"x":592,"y":810660},{"x":597,"y":794224},{"x":602,"y":800848},{"x":608,"y":810140},{"x":614,"y":842820},{"x":620,"y":846488},{"x":626,"y":832972},{"x":632,"y":840768},{"x":638,"y":848740},{"x":644,"y":922136},{"x":650,"y":906884},{"x":656,"y":872728},{"x":662,"y":929136},{"x":668,"y":911192},{"x":674,"y":921328},{"x":680,"y":906024},{"x":686,"y":912800},{"x":692,"y":933176},{"x":698,"y":980188},{"x":704,"y":943720},{"x":711,"y":970860},{"x":718,"y":980200},{"x":725,"y":1026772},{"x":732,"y":973780},{"x":739,"y":992892},{"x":746,"y":1023004},{"x":753,"y":1030008},{"x":760,"y":1011080},{"x":767,"y":1020304},{"x":774,"y":1032880},{"x":781,"y":1045060},{"x":788,"y":1048232},{"x":795,"y":1057536},{"x":802,"y":1066816},{"x":810,"y":1087264},{"x":818,"y":1089340},{"x":826,"y":1131204},{"x":834,"y":1160448},{"x":842,"y":1167460},{"x":850,"y":1190116},{"x":858,"y":1141356},{"x":866,"y":1165840},{"x":874,"y":1162592},{"x":882,"y":1173536},{"x":890,"y":1191984},{"x":898,"y":1194544},{"x":906,"y":1209340},{"x":915,"y":1220572},{"x":924,"y":1229164},{"x":933,"y":1241064},{"x":942,"y":1253052},{"x":951,"y":1272552},{"x":960,"y":1283048},{"x":969,"y":1342464},{"x":978,"y":1307944},{"x":987,"y":1312884},{"x":996,"y":1367532},{"x":1005,"y":1396548},{"x":1015,"y":1350092},{"x":1025,"y":1363684},{"x":1035,"y":1468776},{"x":1045,"y":1390020},{"x":1055,"y":1445128},{"x":1065,"y":1434224},{"x":1075,"y":1454424},{"x":1085,"y":1508224},{"x":1095,"y":1456508},{"x":1105,"y":1511320},{"x":1116,"y":1509516},{"x":1127,"y":1500028},{"x":1138,"y":1520300},{"x":1149,"y":1528408},{"x":1160,"y":1542932},{"x":1171,"y":1575652},{"x":1182,"y":1573260},{"x":1193,"y":1637540},{"x":1204,"y":1615552},{"x":1216,"y":1639828},{"x":1228,"y":1670584},{"x":1240,"y":1654452},{"x":1252,"y":1734952},{"x":1264,"y":1699468},{"x":1276,"y":1705808},{"x":1288,"y":1752332},{"x":1300,"y":1737548},{"x":1313,"y":1848300},{"x":1326,"y":1772220},{"x":1339,"y":1818648},{"x":1352,"y":1813180},{"x":1365,"y":1879700},{"x":1378,"y":1847828},{"x":1391,"y":1931268},{"x":1404,"y":1887656},{"x":1418,"y":1935560},{"x":1432,"y":1973600},{"x":1446,"y":1931840},{"x":1460,"y":1983520},{"x":1474,"y":1969784},{"x":1488,"y":2004320},{"x":1502,"y":2053004},{"x":1517,"y":2123968},{"x":1532,"y":2089168},{"x":1547,"y":2130172},{"x":1562,"y":2107908},{"x":1577,"y":2112952},{"x":1592,"y":2140980},{"x":1607,"y":2150624},{"x":1623,"y":2198208},{"x":1639,"y":2198164},{"x":1655,"y":2345352},{"x":1671,"y":2300704},{"x":1687,"y":2320284},{"x":1703,"y":2340684},{"x":1720,"y":2304244},{"x":1737,"y":2336396},{"x":1754,"y":2343004},{"x":1771,"y":2417064},{"x":1788,"y":2511532},{"x":1805,"y":2424036},{"x":1823,"y":2600780},{"x":1841,"y":2467932},{"x":1859,"y":2504960},{"x":1877,"y":2541004},{"x":1895,"y":2539472},{"x":1913,"y":2580796},{"x":1932,"y":2628112},{"x":1951,"y":2618640},{"x":1970,"y":2701904},{"x":1989,"y":2721324},{"x":2008,"y":2689796},{"x":2028,"y":2763188},{"x":2048,"y":2798444},{"x":2068,"y":2822428},{"x":2088,"y":2805032},{"x":2108,"y":2887912},{"x":2129,"y":2858172},{"x":2150,"y":2934696},{"x":2171,"y":2924808},{"x":2192,"y":2950748},{"x":2213,"y":2971968},{"x":2235,"y":2997820},{"x":2257,"y":3042076},{"x":2279,"y":3080944},{"x":2301,"y":3211392},{"x":2324,"y":3205144},{"x":2347,"y":3212664},{"x":2370,"y":3303404},{"x":2393,"y":3308296},{"x":2416,"y":3331340},{"x":2440,"y":3322248},{"x":2464,"y":3378164},{"x":2488,"y":3454720},{"x":2512,"y":3429960},{"x":2537,"y":3512156},{"x":2562,"y":3497200},{"x":2587,"y":3635440},{"x":2612,"y":3701004},{"x":2638,"y":3599672},{"x":2664,"y":3669772},{"x":2690,"y":3665664},{"x":2716,"y":3883320},{"x":2743,"y":3836868},{"x":2770,"y":3771608},{"x":2797,"y":3769288},{"x":2824,"y":3828180},{"x":2852,"y":3930040},{"x":2880,"y":3994732},{"x":2908,"y":3923748},{"x":2937,"y":4007856},{"x":2966,"y":4090812},{"x":2995,"y":4005940},{"x":3024,"y":4060792},{"x":3054,"y":4190616},{"x":3084,"y":4259356},{"x":3114,"y":4200712},{"x":3145,"y":4233808},{"x":3176,"y":4254720},{"x":3207,"y":4502228},{"x":3239,"y":4442496},{"x":3271,"y":4416156},{"x":3303,"y":4448368},{"x":3336,"y":4530784},{"x":3369,"y":4583344},{"x":3402,"y":4614524},{"x":3436,"y":4697216},{"x":3470,"y":4737576},{"x":3504,"y":4755764}],"kde":[1752,1508,1528,1488,1524,1512,1488,1488,1544,1500,1496,1488,1516,1540,1500,1496,1512,1492,1520,1500,1492,1520,1492,1500,1496,1532,1512,1488,1496,1532,1504,1496,1520,1524,1528,1500,1492,1520,1504,1496,1492,1500,1528,1500,1504,1496,1536,1512,1544,1496,1540,1492,1500,1500,1536,1520,1500,1520,1528,1516,1500,1504,1524,1512,1516,1496,1504,1556,1508,1488,1500,1584,1496,1524,1500,1504,1500,1500,1496,1508,1500,1492,1508,1504,1492,1504,1492,1520,1504,1500,1496,1496,2324,2440,2468,2508,2484,2304,1524,1520,1504,1516,1512,1492,1500,1504,1492,1520,1496,1508,1508,1496,1504,1500,1520,1500,1504,1504,1504,1500,1500,1500,1520,1492,1496,1500,1504,1504,1488,1496,1492,1504,1500,1516,1496,1492,1512,1492,1492,1492,1492,1516,1504,1512,1496,1496,1532,1504,1496,1520,1492,1524,1496,1496,1488,1496,1488,1520,1520,1500,1496,1516,1500,1500,1512,1492,1492,1524,1508,1500,1488,1488,1528,1492,1496,1496,1504,1544,1496,1496,1492,1492,1500,1500,1504,1528,1492,1492,1492,1540,1496,1492,1492,1512,1524,1492,1492,1492,1496,1532,1496,1504,1496,1496,1524,1508,1512,1500,1492,1492,1512,1496,1492,1504,1516,1504,1500,1500,1504,1500,1500,1492,1496,1492,1500,1504,1528,1500,1496,1496,1504,1500,1524,1500,1496,1492,1508,1532,1492,1532,1516,1496,1500,1500,1500,1524,1496,1504,1532,1500,1500,1512,1496,1520,1516,1496,1524,1500,1528,1496,1508,1492,1496,1524,1500,1516,1496,1496,1500,1500,1512,1512,1516,1508,1496,1496,1496,1500,1492,1520,1496,1512,1500,1496,1496,1496,1512,1528,1524,1496,1500,1492,1496,1500,1528,1500,1496,1496,1528,1496,1496,1496,1500,1512,1504,1520,1496,1500,1504,1492,1496,1508,1500,1488,1500,1536,1500,1496,1492,1496,1508,1524,1496,1504,1508,1504,1500,1504,1496,1496,1492,1504,1512,1500,1496,1504,1528,1492,1500,1504,1556,1500,1500,1496,1496,1496,1500,1496,1496,1504,1492,1496,1496,1496,1500,1500,1512,1516,1500,1496,1520,1504,1496,1492,1500,1524,1528,1492,1496,1492,1496,1516,1500,1508,1496,1528,1496,1512,1508,1492,1520,1496,1512,1500,1496,1504,1492,1500,1496,1492,1572,1492,1496,1500,1496,1516,1488,1496,1504,1512,1500,1492,1492,1508,1500,1496,1492,1504,1520,1496,1496,1492,1496,1524,1516,1512,1496,1496,1500,1504,1500,1504,1500,1496,1516,1504,1496,1496,1500,1512,1492,1504,1504,1512,1500,1524,1492,1504,1496,1504,1528,1512,1504,1496,1504,1516,1504,1500,1500,1496,1504,1520,1496,1504,1504,1492,1496,1496,1492,1496,1504,1504,1512,1500,1496,1500,1520,1496,1496,1496,1520,1496,1492,1504,1496,1496,1492,1504,1492,1496,1504,1496,1512,1516,1500,1500,1516,1496,1508,1496,1504,1512,1532,1504,1488,1504,1492,1492,1504,1500,1500,1492,1492,1512,1536,1528,1492,1508,1504,1512,1496,1492,1532,1504,1492,1504,1500,1500,1504,1492,1532,1508,1496,1500,1496,1500,1496,1496,1504,1508,1500,1500,1504,1504,1500,1492,1504,1500,1536,1496,1496,1496,1496,1504,1504,1496,1508,1496,1500,1516,1528,1500,1500,1504,1500,1496,1496,1492,1496,1528,1500,1492,1504,1492,1520,1500,1504,1508,1496,1524,1508,1512,1496,1500,1496,1508,1492,1488,1496,1516,1500,1492,1496,1504,1492,1496,1500,1500,1504,1496,1496,1496,1508,1492,1488,1500,1512,1504,1496,1496,1500,1496,1500,1492,1500,1496,1500,1504,1488,1500,1488,1492,1508,1512,1492,1496,1532,1512,1496,1500,1500,1492,1528,1500,1504,1496,1488,1504,1500,1500,1500,1504,1504,1504,1552,1500,1500,1496,1508,1492,1500,1496,1500,1508,1500,1516,1504,1496,1500,1504,1524,1492,1500,1500,1532,1488,1500,1500,1496,1512,1504,1524,1496,1504,1500,1496,1504,1496,1488,1488,1496,1496,1492,1492,1516,1504,1508,1496,1508,1524,1508,1504,1496,1496,1528,1500,1492,1500,1500,1536,1496,1496,1500,1496,1504,1532,1512,1520,1492,1500,1528,1512,1508,1500,1500,1528,1524,1512,1496,1520,1492,1496,1496,1508,1496,1496,1524,1508,1532,1500,1528,1496,1492,1500,1496,1532,1512,1496,1496,1492,1508,1500,1492,1500,1504,1528,1488,1496,1512,1536,1492,1492,1504,1500,1496,1516,1492,1512,1508,1492,1520,1500,1488,1496,1500,1528,1500,1488,1504,1508,1516,1500,1500,1508,1508,1496,1492,1496,1512,1508,1500,1504,1508,1496,1500,1512,1500,1500,1492,1504,1500,1508,1496,1500,1508,1504,1496,1504,1496,1504,1520,1520,1504,1556,1504,1496,1500,1512,1492,1500,1496,1496,1508,1496,1500,1508,1512,1496,1500,1500,1528,1536,1496,1500,1504,1500,1516,1496,1492,1500,1496,1492,1504,1492,1500,1496,1512,1504,1500,1500,1508,1528,1500,1496,1492,1500,1524,1500,1500,1496,1496,1504,1508,1496,1500,1496,1492,1504,1516,1504,1496,1524,1508,1536,1500,1492,1500,1500,1488,1492,1492,1492,1492,1496,1496,1500,1500,1496,1508,1536,1492,1496,1500,1496,1508,1512,1496,1592,1504,1504,1500,1504,1488,1512,1496,1500,1492,1516,1500,1504,1488,1492,1528,1496,1504,1504,1500,1536,1504,1496,1496,1504,1500,1496,1496,1500,1496,1520,1496,1504,1504,1508,1488,1500,1504,1512,1500,1496,1496,1504,1524,1500,1492,1504,1504,1540,1496,1488,1492,1488,1496,1492,1512,1496,1488,1492,1516,1496,1492,1496,1500,1496,1496,1496,1528,1496,1520,1492,1496,1484,1496,1492,1520,1516,1492,1496,1488,1492,1520,1492,1496,1512,1524,1500,1504,1496,1496,1528,1520,1496,1524,1492,1500,1504,1508,1516,1496,1496,1512,1504,1524,1488,1516,1536,1492,1500,1536,1492,1492,1500,1500,1496,1492,1496,1528,1516,1528,1500,1520,1504],"result":{"estimate":1363.32781870182,"r_square":0.9995036697085291}},{"name":"hash B 100","description":{"start":1,"sampling":1.01,"stabilize":true,"quota":500000000,"limit":2000,"instances":["minor-allocated","major-allocated","monotonic-clock"],"samples":522,"time":503785697},"dataset":[{"x":1,"y":2536},{"x":2,"y":2680},{"x":3,"y":3892},{"x":4,"y":5128},{"x":5,"y":6244},{"x":6,"y":7520},{"x":7,"y":8728},{"x":8,"y":9968},{"x":9,"y":11232},{"x":10,"y":12392},{"x":11,"y":13628},{"x":12,"y":14808},{"x":13,"y":16048},{"x":14,"y":17264},{"x":15,"y":18636},{"x":16,"y":19660},{"x":17,"y":20996},{"x":18,"y":22104},{"x":19,"y":23416},{"x":20,"y":24504},{"x":21,"y":25824},{"x":22,"y":26932},{"x":23,"y":28244},{"x":24,"y":29408},{"x":25,"y":30620},{"x":26,"y":31956},{"x":27,"y":33180},{"x":28,"y":34272},{"x":29,"y":35660},{"x":30,"y":37288},{"x":31,"y":38292},{"x":32,"y":39600},{"x":33,"y":40876},{"x":34,"y":42032},{"x":35,"y":43552},{"x":36,"y":44240},{"x":37,"y":45444},{"x":38,"y":46684},{"x":39,"y":47976},{"x":40,"y":48860},{"x":41,"y":50036},{"x":42,"y":51416},{"x":43,"y":52584},{"x":44,"y":54316},{"x":45,"y":55188},{"x":46,"y":56256},{"x":47,"y":57728},{"x":48,"y":59044},{"x":49,"y":60260},{"x":50,"y":61156},{"x":51,"y":62524},{"x":52,"y":64060},{"x":53,"y":65428},{"x":54,"y":66320},{"x":55,"y":67920},{"x":56,"y":69512},{"x":57,"y":69820},{"x":58,"y":71572},{"x":59,"y":72448},{"x":60,"y":73556},{"x":61,"y":75080},{"x":62,"y":76424},{"x":63,"y":77672},{"x":64,"y":78824},{"x":65,"y":79936},{"x":66,"y":80968},{"x":67,"y":82568},{"x":68,"y":83840},{"x":69,"y":84616},{"x":70,"y":93012},{"x":71,"y":87472},{"x":72,"y":88176},{"x":73,"y":89568},{"x":74,"y":90988},{"x":75,"y":91728},{"x":76,"y":93608},{"x":77,"y":94856},{"x":78,"y":96248},{"x":79,"y":96736},{"x":80,"y":97624},{"x":81,"y":98808},{"x":82,"y":100196},{"x":83,"y":101448},{"x":84,"y":102276},{"x":85,"y":103796},{"x":86,"y":105220},{"x":87,"y":106360},{"x":88,"y":107648},{"x":89,"y":109276},{"x":90,"y":110276},{"x":91,"y":111424},{"x":92,"y":113360},{"x":93,"y":114132},{"x":94,"y":134028},{"x":95,"y":124024},{"x":96,"y":122208},{"x":97,"y":136736},{"x":98,"y":119912},{"x":99,"y":121532},{"x":100,"y":122116},{"x":101,"y":124536},{"x":102,"y":145204},{"x":103,"y":130460},{"x":104,"y":145964},{"x":105,"y":128028},{"x":106,"y":149196},{"x":107,"y":130628},{"x":108,"y":132328},{"x":109,"y":134012},{"x":110,"y":135304},{"x":111,"y":136120},{"x":112,"y":136880},{"x":113,"y":161632},{"x":114,"y":144800},{"x":115,"y":145784},{"x":116,"y":147140},{"x":117,"y":148576},{"x":118,"y":149784},{"x":119,"y":163836},{"x":120,"y":146640},{"x":121,"y":147836},{"x":122,"y":148816},{"x":123,"y":150172},{"x":124,"y":151480},{"x":125,"y":153196},{"x":126,"y":154556},{"x":127,"y":155832},{"x":128,"y":158592},{"x":129,"y":159324},{"x":130,"y":160468},{"x":131,"y":160980},{"x":132,"y":162028},{"x":133,"y":186464},{"x":134,"y":184304},{"x":135,"y":165856},{"x":136,"y":166816},{"x":137,"y":167752},{"x":138,"y":168820},{"x":139,"y":169148},{"x":140,"y":170488},{"x":141,"y":172240},{"x":142,"y":173108},{"x":143,"y":174556},{"x":144,"y":175556},{"x":145,"y":177416},{"x":146,"y":178712},{"x":147,"y":180024},{"x":148,"y":180748},{"x":149,"y":182916},{"x":150,"y":183832},{"x":151,"y":184380},{"x":152,"y":186120},{"x":153,"y":186548},{"x":154,"y":189232},{"x":155,"y":218696},{"x":156,"y":215004},{"x":157,"y":192728},{"x":158,"y":193292},{"x":159,"y":193936},{"x":160,"y":195144},{"x":161,"y":196308},{"x":162,"y":197780},{"x":163,"y":198908},{"x":164,"y":199748},{"x":165,"y":201488},{"x":166,"y":201968},{"x":167,"y":204716},{"x":168,"y":207200},{"x":169,"y":207320},{"x":170,"y":212208},{"x":171,"y":228224},{"x":172,"y":219436},{"x":173,"y":233492},{"x":174,"y":221068},{"x":175,"y":214644},{"x":176,"y":215204},{"x":177,"y":217396},{"x":178,"y":218888},{"x":179,"y":241092},{"x":180,"y":243284},{"x":181,"y":220464},{"x":182,"y":222124},{"x":183,"y":223896},{"x":184,"y":225136},{"x":185,"y":226816},{"x":186,"y":227016},{"x":187,"y":228848},{"x":188,"y":230740},{"x":189,"y":231540},{"x":190,"y":233012},{"x":191,"y":233012},{"x":192,"y":244440},{"x":193,"y":268064},{"x":194,"y":256512},{"x":195,"y":238348},{"x":196,"y":240764},{"x":197,"y":240868},{"x":198,"y":241572},{"x":199,"y":243600},{"x":200,"y":244616},{"x":202,"y":247624},{"x":204,"y":267308},{"x":206,"y":261520},{"x":208,"y":270228},{"x":210,"y":256312},{"x":212,"y":259584},{"x":214,"y":262280},{"x":216,"y":302632},{"x":218,"y":292504},{"x":220,"y":289808},{"x":222,"y":296488},{"x":224,"y":282544},{"x":226,"y":286048},{"x":228,"y":277736},{"x":230,"y":280756},{"x":232,"y":285248},{"x":234,"y":286188},{"x":236,"y":315252},{"x":238,"y":311032},{"x":240,"y":292912},{"x":242,"y":303376},{"x":244,"y":299516},{"x":246,"y":302080},{"x":248,"y":356976},{"x":250,"y":303788},{"x":252,"y":306036},{"x":254,"y":308932},{"x":256,"y":312472},{"x":258,"y":315232},{"x":260,"y":317872},{"x":262,"y":321124},{"x":264,"y":345992},{"x":266,"y":351316},{"x":268,"y":362504},{"x":270,"y":347468},{"x":272,"y":333676},{"x":274,"y":333512},{"x":276,"y":335964},{"x":278,"y":341120},{"x":280,"y":340612},{"x":282,"y":345900},{"x":284,"y":349444},{"x":286,"y":352420},{"x":288,"y":372888},{"x":290,"y":374884},{"x":292,"y":383356},{"x":294,"y":361372},{"x":296,"y":362252},{"x":298,"y":364980},{"x":300,"y":412144},{"x":303,"y":371060},{"x":306,"y":375380},{"x":309,"y":379684},{"x":312,"y":403672},{"x":315,"y":409348},{"x":318,"y":395676},{"x":321,"y":394652},{"x":324,"y":400452},{"x":327,"y":399260},{"x":330,"y":403996},{"x":333,"y":429296},{"x":336,"y":435384},{"x":339,"y":415288},{"x":342,"y":422496},{"x":345,"y":430288},{"x":348,"y":429508},{"x":351,"y":433120},{"x":354,"y":433948},{"x":357,"y":437024},{"x":360,"y":439596},{"x":363,"y":444252},{"x":366,"y":449804},{"x":369,"y":452208},{"x":372,"y":462044},{"x":375,"y":460620},{"x":378,"y":464816},{"x":381,"y":466336},{"x":384,"y":470728},{"x":387,"y":472240},{"x":390,"y":479164},{"x":393,"y":481340},{"x":396,"y":487160},{"x":399,"y":495820},{"x":402,"y":495744},{"x":406,"y":531404},{"x":410,"y":526952},{"x":414,"y":509136},{"x":418,"y":512444},{"x":422,"y":516016},{"x":426,"y":522464},{"x":430,"y":535004},{"x":434,"y":535428},{"x":438,"y":582904},{"x":442,"y":560764},{"x":446,"y":569992},{"x":450,"y":549856},{"x":454,"y":556024},{"x":458,"y":567524},{"x":462,"y":600180},{"x":466,"y":590996},{"x":470,"y":593208},{"x":474,"y":649788},{"x":478,"y":591368},{"x":482,"y":650756},{"x":486,"y":596660},{"x":490,"y":598200},{"x":494,"y":627920},{"x":498,"y":657828},{"x":502,"y":640920},{"x":507,"y":664904},{"x":512,"y":636100},{"x":517,"y":634008},{"x":522,"y":639972},{"x":527,"y":645344},{"x":532,"y":695660},{"x":537,"y":659480},{"x":542,"y":673164},{"x":547,"y":670984},{"x":552,"y":676708},{"x":557,"y":750384},{"x":562,"y":739032},{"x":567,"y":777112},{"x":572,"y":723728},{"x":577,"y":705096},{"x":582,"y":712096},{"x":587,"y":742040},{"x":592,"y":778920},{"x":597,"y":798812},{"x":602,"y":782360},{"x":608,"y":750080},{"x":614,"y":754556},{"x":620,"y":759964},{"x":626,"y":820800},{"x":632,"y":776860},{"x":638,"y":779564},{"x":644,"y":788628},{"x":650,"y":815780},{"x":656,"y":884692},{"x":662,"y":810640},{"x":668,"y":816976},{"x":674,"y":855300},{"x":680,"y":853964},{"x":686,"y":913096},{"x":692,"y":870676},{"x":698,"y":852424},{"x":704,"y":937192},{"x":711,"y":909644},{"x":718,"y":878140},{"x":725,"y":931188},{"x":732,"y":894280},{"x":739,"y":906152},{"x":746,"y":981404},{"x":753,"y":926580},{"x":760,"y":953892},{"x":767,"y":960184},{"x":774,"y":955320},{"x":781,"y":988696},{"x":788,"y":982972},{"x":795,"y":1025356},{"x":802,"y":988580},{"x":810,"y":992332},{"x":818,"y":1005856},{"x":826,"y":1018504},{"x":834,"y":1096028},{"x":842,"y":1053212},{"x":850,"y":1038456},{"x":858,"y":1047468},{"x":866,"y":1095720},{"x":874,"y":1093388},{"x":882,"y":1084256},{"x":890,"y":1164552},{"x":898,"y":1125608},{"x":906,"y":1109592},{"x":915,"y":1121472},{"x":924,"y":1137712},{"x":933,"y":1186376},{"x":942,"y":1142896},{"x":951,"y":1204288},{"x":960,"y":1206240},{"x":969,"y":1211924},{"x":978,"y":1285652},{"x":987,"y":1233332},{"x":996,"y":1208144},{"x":1005,"y":1269916},{"x":1015,"y":1347280},{"x":1025,"y":1299628},{"x":1035,"y":1338604},{"x":1045,"y":1316372},{"x":1055,"y":1322444},{"x":1065,"y":1291928},{"x":1075,"y":1393764},{"x":1085,"y":1358880},{"x":1095,"y":1328312},{"x":1105,"y":1400728},{"x":1116,"y":1396684},{"x":1127,"y":1367880},{"x":1138,"y":1481112},{"x":1149,"y":1447060},{"x":1160,"y":1457960},{"x":1171,"y":1445968},{"x":1182,"y":1452732},{"x":1193,"y":1528664},{"x":1204,"y":1525240},{"x":1216,"y":1539508},{"x":1228,"y":1522636},{"x":1240,"y":1514272},{"x":1252,"y":1581140},{"x":1264,"y":1552568},{"x":1276,"y":1647684},{"x":1288,"y":1584032},{"x":1300,"y":1576960},{"x":1313,"y":1652288},{"x":1326,"y":1663744},{"x":1339,"y":1624184},{"x":1352,"y":1687592},{"x":1365,"y":1700724},{"x":1378,"y":1718500},{"x":1391,"y":1721580},{"x":1404,"y":1793968},{"x":1418,"y":1720140},{"x":1432,"y":1790744},{"x":1446,"y":1801292},{"x":1460,"y":1771072},{"x":1474,"y":1890096},{"x":1488,"y":1856600},{"x":1502,"y":1950644},{"x":1517,"y":1927816},{"x":1532,"y":1945564},{"x":1547,"y":1877520},{"x":1562,"y":1942484},{"x":1577,"y":1952272},{"x":1592,"y":1981824},{"x":1607,"y":2003976},{"x":1623,"y":2119168},{"x":1639,"y":2031000},{"x":1655,"y":2052692},{"x":1671,"y":2072696},{"x":1687,"y":2049536},{"x":1703,"y":2073492},{"x":1720,"y":2165820},{"x":1737,"y":2166876},{"x":1754,"y":2211944},{"x":1771,"y":2197240},{"x":1788,"y":2316908},{"x":1805,"y":2245696},{"x":1823,"y":2214376},{"x":1841,"y":2284312},{"x":1859,"y":2305100},{"x":1877,"y":2422580},{"x":1895,"y":2321796},{"x":1913,"y":2390392},{"x":1932,"y":2409112},{"x":1951,"y":2420516},{"x":1970,"y":2492832},{"x":1989,"y":2490832},{"x":2008,"y":2511116},{"x":2028,"y":2533580},{"x":2048,"y":2553096},{"x":2068,"y":2558100},{"x":2088,"y":2635224},{"x":2108,"y":2643264},{"x":2129,"y":2675348},{"x":2150,"y":2657172},{"x":2171,"y":2701748},{"x":2192,"y":2697124},{"x":2213,"y":2775888},{"x":2235,"y":2776192},{"x":2257,"y":2812604},{"x":2279,"y":2862980},{"x":2301,"y":2839804},{"x":2324,"y":2823704},{"x":2347,"y":2909672},{"x":2370,"y":3012264},{"x":2393,"y":3082660},{"x":2416,"y":2930624},{"x":2440,"y":3059100},{"x":2464,"y":3085700},{"x":2488,"y":3099620},{"x":2512,"y":3133572},{"x":2537,"y":3083228},{"x":2562,"y":3287512},{"x":2587,"y":3251168},{"x":2612,"y":3218864},{"x":2638,"y":3202628},{"x":2664,"y":3284552},{"x":2690,"y":3357016},{"x":2716,"y":3392864},{"x":2743,"y":3459812},{"x":2770,"y":3451980},{"x":2797,"y":3424588},{"x":2824,"y":3491900},{"x":2852,"y":3641508},{"x":2880,"y":3598980},{"x":2908,"y":3744052},{"x":2937,"y":3609632},{"x":2966,"y":3700252},{"x":2995,"y":3777992},{"x":3024,"y":3797580},{"x":3054,"y":3808076},{"x":3084,"y":3919208},{"x":3114,"y":3833140},{"x":3145,"y":3817404},{"x":3176,"y":3899228},{"x":3207,"y":3935916},{"x":3239,"y":3986768},{"x":3271,"y":4057256},{"x":3303,"y":4019292},{"x":3336,"y":4109928},{"x":3369,"y":4141820},{"x":3402,"y":4180540},{"x":3436,"y":4259800},{"x":3470,"y":4257892},{"x":3504,"y":4299624},{"x":3539,"y":4385012},{"x":3574,"y":4435404},{"x":3609,"y":4502868},{"x":3645,"y":4488328},{"x":3681,"y":4606972},{"x":3717,"y":4514884},{"x":3754,"y":4693644},{"x":3791,"y":4655236},{"x":3828,"y":4767748}],"kde":[1592,1388,1388,1392,1432,1380,1376,1400,1384,1380,1408,1376,1400,1384,1376,1372,1384,1376,1384,1380,1388,1376,1372,1380,1384,1376,1400,1376,1404,1380,1376,1376,1372,1408,1380,18920,1440,1432,1436,1460,1424,1448,1436,1436,1444,1444,1432,1440,1432,1444,1440,1440,1440,1448,1440,1452,1440,1428,1436,1444,1440,1432,1480,1440,1436,1432,1440,1440,1468,1436,1444,1468,1432,1436,1456,1472,1456,1440,1440,1460,1444,1468,1432,1496,1436,1428,1436,1468,1440,1436,1436,1444,1444,1432,1436,1456,1440,1436,1436,1432,1448,1468,1468,1444,1448,1440,1456,1440,1440,1436,1436,1436,17660,1384,1388,1380,1412,1376,1384,1384,1384,1404,1380,1380,1376,1388,1380,1380,1384,1376,1384,1380,1380,1380,1376,1380,1388,1392,1396,1380,1388,1380,1396,1444,1380,1384,1392,1388,1404,1384,1380,1380,1384,1380,1384,1384,1384,1380,1384,1424,1380,1384,1416,1400,1384,1384,1372,1392,1384,1380,1372,1384,1388,1380,1388,1376,1384,1384,1384,1392,1396,1380,1380,1384,1384,1380,1380,1388,1452,1384,1384,1392,1384,1380,1380,1384,1388,1404,1380,1376,1392,1396,1376,1384,1384,1384,1384,1384,1384,1380,1380,1384,1380,1408,1380,1380,1384,1412,1380,1384,1384,1440,1392,1384,1376,1404,1404,1380,1372,1376,1400,1384,1380,1376,1380,1376,1380,1376,1404,1372,1376,1384,1400,1404,1384,1376,1372,1424,1384,1380,1380,1408,1388,1384,1384,1388,1384,1404,1380,1384,1380,1408,1384,1396,1400,1404,1380,1384,1396,1424,1396,1376,1400,1404,1368,1376,1388,1404,1376,1380,1392,1404,1384,1388,1392,1404,1384,1376,1384,1428,1388,1380,1372,1396,1384,1384,1380,1384,1372,1376,1412,1380,1420,1392,1384,1400,1408,1384,1380,1392,1424,1392,1384,1380,1384,1388,1380,1384,1384,1384,1380,1384,1380,1384,1380,1388,1388,1400,1384,1376,1412,1408,1384,1380,1384,1408,1412,1384,1384,1388,1396,1380,1384,1384,1376,1384,1380,1384,1392,1380,1384,1396,1380,1412,1380,1380,1392,1404,1380,1380,1392,1416,1376,1380,1384,1408,1380,1380,1380,1432,1376,1384,1396,1380,1412,1380,1388,1400,1380,1380,1404,1388,1380,1372,1384,1376,1400,1380,1388,1380,1412,1384,1384,1396,1416,1380,1380,1376,1408,1384,1384,1384,1388,1412,1388,1420,1388,1392,1380,1380,1376,1380,1380,1376,1412,1396,1380,1384,1412,1392,1388,1380,1408,1384,1384,1384,1404,1380,1384,1408,1380,1384,1384,1380,1408,1384,1392,1404,1384,1384,1380,1376,1416,1380,1392,1408,1384,1384,1380,1408,1384,1388,1380,1400,1376,1376,1384,1428,1384,1384,1384,1404,1380,1380,1380,1388,1380,1376,1380,1380,1376,1384,1380,1384,1416,1380,1408,1392,1392,1384,1380,1384,1392,1376,1388,1404,1388,1388,1376,1404,1380,1388,1384,1380,1380,1384,1380,1384,1380,1392,1372,1412,1380,1396,1392,1400,1384,1380,1380,1380,1380,1376,1392,1376,1380,1384,1376,1384,1412,1388,1416,1380,1408,1380,1400,1388,1380,1408,1392,1384,1376,1404,1384,1384,1380,1412,1388,1384,1388,1392,1396,1388,1380,1392,1384,1400,1420,1384,4764,1432,1384,1380,1404,1416,1376,1376,1372,1420,1388,1380,1376,1408,1396,1380,1380,1420,1384,1384,1380,1400,1460,1384,1380,1372,1404,1412,1380,1376,1396,1388,1380,1384,1424,1404,1384,1380,1428,1388,1392,1380,1380,1408,1392,1384,1376,1436,1400,1380,1384,1400,1408,1384,1380,1404,1396,1384,1380,1396,1384,1408,1376,1380,1412,1408,1384,1412,1440,1404,1396,1380,1412,1376,1384,1384,1424,1404,1384,1380,1404,1380,1420,1380,1376,1400,1380,1376,1380,1416,1384,1376,1384,1428,1392,1384,1380,1420,1388,1380,1380,1412,1396,1372,1384,1384,1412,1404,1372,1376,1428,1388,1380,1380,1404,1388,1380,1380,1404,1392,1384,1384,1400,1420,1384,1376,1380,1400,1392,1380,1388,1420,1376,1384,1380,1404,1384,1380,1416,1384,1376,1380,1372,1380,1404,1376,1384,1372,1404,1388,1372,1400,1384,1376,1372,1392,1384,1376,1392,1396,1380,1376,1372,1388,1384,1404,1376,1380,1384,1412,1380,1384,1376,1376,1380,1380,1408,1380,1376,1372,1384,1380,1376,1376,1408,1384,1384,1380,1384,1376,1400,1380,1380,1400,1404,1380,1376,1404,1376,1380,1372,1400,1404,1376,1380,1384,1376,1384,1376,1384,1380,1420,1380,1372,1372,1384,1372,1412,1376,1380,1392,1376,1384,1376,1376,1380,1376,1380,1392,1372,1376,1376,1412,1392,1384,1380,1400,1384,1384,1384,1412,1384,1384,1380,1412,1380,1384,1376,1408,1380,1372,1380,1384,1404,1384,1384,1380,1424,1384,1384,1380,1384,1416,1376,1412,1380,1376,1380,1384,1396,1388,1380,1384,1388,1380,1424,1392,1380,1376,1404,1380,1376,1384,1408,1384,1380,1376,1400,1376,1380,1392,1404,1376,1408,1392,1392,1380,1376,1380,1396,1420,1380,1380,1384,1380,1384,1380,1376,1376,1372,1380,1376,1388,1372,1380,1392,1384,1376,1376,1404,1400,1380,1376,1408,1384,1380,1376,1404,1408,1372,1380,1380,1380,1384,1380,1380,1388,1372,1376,1380,1400,1388,1380,1376,1376,1484,1384,1380,1380,1384,1372,1380,1380,1376,1400,1384,1376,1384,1384,1380,1380,1376,1392,1400,1380,1372,1380,1376,1408,1376,1376,1384,1384,1384,1384,1380,1384,1412,1380,1392,1384,1404,1376,1392,1384,1400,1380,1396,1380,1380,1380,1380,1384,1376,1384,1380,1388,1380,1376,1388,1404,1384,1376,1380,1424,1384,1372,1380,1392,1412,1380,1380,1384,1432,1376,1376,1388,1384,1380,1384,1388,1388,1408,1376,1384,1380,1408,1380,1376,1384,1408,1384,1388,1380,1392,1416,1376,1384,1380,1376,1380,1392,1408,1384,1384,1380,1404,1384,1384,1376,1384,1376],"result":{"estimate":1244.013867810196,"r_square":0.9994978766780381}}]}
+
+
+if (contents == null)
+    d3.json("outputs.json", render);
+else
+    render(contents);
+}
+
+  </script>
+
+</body>
+</html>
