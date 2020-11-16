@@ -1,0 +1,17 @@
+(executable
+ (name hash)
+ (modules hash)
+ (foreign_stubs
+  (language c)
+  (names c))
+ (libraries bechamel bechamel-notty notty.unix bechamel-js digestif))
+
+(rule
+ (targets report.json)
+ (action (with-stdout-to %{targets} (run ./hash.exe json))))
+
+(rule
+ (targets report.html)
+ (mode promote)
+ (action (system "%{bin:bechamel-html} < %{dep:report.json} > %{targets}")))
+
