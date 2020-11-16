@@ -1,6 +1,9 @@
 open Bechamel
 open Toolkit
 
+external unsafe_get_int64 : string -> int -> int64 = "%caml_string_get64u"
+
+let v0 v = Int64.to_int (unsafe_get_int64 v 0)
 external v1 : string -> int = "caml_hash_v1" [@@noalloc]
 external v2 : string -> int = "caml_hash_v2" [@@noalloc]
 
@@ -38,6 +41,11 @@ let normal k n =
   done ;
   Array.map (Digestif.of_hex k <.> to_hex <.> Float.to_int <.> ( *. ) random_max) values
 
+let v0 k n = 
+  let vs = normal k n in
+  Staged.stage @@ fun () ->
+  Array.iter (ignore <.> v0 <.> Digestif.to_raw_string k) vs
+
 let v1 k n = 
   let vs = normal k n in
   Staged.stage @@ fun () ->
@@ -49,11 +57,15 @@ let v2 k n =
   Array.iter (ignore <.> v2 <.> Digestif.to_raw_string k) vs
 
 let test0 =
-  Test.make_indexed ~name:"A" ~fmt:"%s %d" ~args:[ 10; 50; 100 ]
-    (v1 Digestif.SHA1)
+  Test.make_indexed ~name:"v0" ~fmt:"%s %d" ~args:[ 10; 50; 100 ]
+    (v0 Digestif.SHA1)
 
 let test1 =
-  Test.make_indexed ~name:"B" ~fmt:"%s %d" ~args:[ 10; 50; 100 ]
+  Test.make_indexed ~name:"v1" ~fmt:"%s %d" ~args:[ 10; 50; 100 ]
+    (v1 Digestif.SHA1)
+
+let test2 =
+  Test.make_indexed ~name:"v2" ~fmt:"%s %d" ~args:[ 10; 50; 100 ]
     (v2 Digestif.SHA1)
 
 let benchmark () =
@@ -65,7 +77,7 @@ let benchmark () =
     Benchmark.cfg ~limit:2000 ~quota:(Time.second 0.5) ~kde:(Some 1000) () in
   let raw_results =
     Benchmark.all cfg instances
-      (Test.make_grouped ~name:"hash" ~fmt:"%s %s" [ test0; test1 ]) in
+      (Test.make_grouped ~name:"hash" ~fmt:"%s %s" [ test0; test1; test2 ]) in
   let results =
     List.map (fun instance -> Analyze.all ols instance raw_results) instances
   in
